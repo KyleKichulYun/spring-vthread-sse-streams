@@ -1,4 +1,6 @@
 import os
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 from dotenv import load_dotenv
 from typing import TypedDict, List
 from pydantic import BaseModel, Field
@@ -28,6 +30,10 @@ class AgentState(TypedDict):
 class GradeOutput(BaseModel):
     score: str = Field(description="평가 결과. 'Pass' 또는 'Fail'만 입력")
     reason: str = Field(description="왜 이런 평가를 내렸는지 논리적인 이유 1~2문장")
+
+class RewriteOutput(BaseModel):
+    improved_query: str = Field(description="원래 질문을 더 구체적이고 명확하게 개선한 검색어")
+    reasoning: str = Field(description="왜 이렇게 검색어를 개선했는지 간단한 설명")
 
 # ==========================================
 # 노드(Node) 실제 구현
@@ -81,7 +87,25 @@ def evaluate_node(state: AgentState):
 def rewrite_query_node(state: AgentState):
     print("\n[재작성] 평가 실패. 검색어 수정 중...")
     # (여기도 LLM을 붙일 수 있지만, 일단 테스트를 위해 문자열 추가로 대체)
-    return {"question": state['question'] + " 구체적인 한도액", "retry_count": state["retry_count"] + 1}
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """당신은 AI 에이전트의 검색 성능을 극대화하는 '전문 검색 전략가'입니다.
+        이전 검색이 실패한 이유(피드백)를 분석하여, DB에서 정답을 찾을 수 있는 **새로운 검색 쿼리**를 작성하세요.
+        문장이 아닌, 검색 매칭률이 높은 '핵심 키워드' 위주로 재구성하는 것이 좋습니다."""),
+        ("user", "원래 질문: {question}\n\n이전 평가 피드백: {feedback}")
+    ])    
+
+    # LLM이 무조건 RewriteOutput(Pydantic) 형태의 JSON을 반환하도록 강제
+    structured_llm = llm.with_structured_output(RewriteOutput)
+    chain = prompt | structured_llm
+
+    # 현재 상태의 질문과 피드백을 LLM에 전달하여 개선된 검색어를 받아옵니다.
+    result = chain.invoke({"question": state['question'], "feedback": state["feedback"]})
+
+    print(f"🔄 새 검색어 적용: '{result.improved_query}'")
+    print(f"💡 변경 이유: {result.reasoning}")
+
+    return {"question": result.improved_query, "retry_count": state["retry_count"] + 1}
 
 # ==========================================
 # 라우팅 및 그래프 조립

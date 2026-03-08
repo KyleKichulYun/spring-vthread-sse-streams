@@ -1,21 +1,137 @@
-> A high-performance real-time SSE broadcasting system built with Java 21 Virtual Threads, Spring Boot 3, Redis Streams, and Next.js.
-> (Java 21 가상 스레드, Spring Boot 3 AOT, Redis Streams, Next.js로 구축된 고성능 실시간 SSE 브로드캐스팅 시스템)
 
-# 🚀 High-Concurrency Realtime Event Streams (Spring Boot 3 AOT + Virtual Threads)
 
-![Java](https://img.shields.io/badge/Java-21-blue?style=for-the-badge&logo=openjdk)
-![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.x-6DB33F?style=for-the-badge&logo=spring)
-![GraalVM](https://img.shields.io/badge/GraalVM-Native_Image-EC2025?style=for-the-badge&logo=graalvm)
-![Redis](https://img.shields.io/badge/Redis_Streams-DC382D?style=for-the-badge&logo=redis)
-![Next.js](https://img.shields.io/badge/Next.js-000000?style=for-the-badge&logo=next.js)
+> A high-performance real-time SSE broadcasting system integrated with an autonomous LLM Agent, built with Java 21 Virtual Threads, Spring Boot 3, Redis Streams, Next.js, and Python (LangGraph/Neo4j).
+> (Java 21 가상 스레드, Spring Boot 3 AOT, Redis Streams, Next.js 및 자율형 LLM 에이전트로 구축된 고성능 실시간 SSE 브로드캐스팅 시스템)
 
-A high-performance, real-time event broadcasting system designed to handle massive concurrent Server-Sent Events (SSE) connections efficiently using **Java 21 Virtual Threads**, **Spring Boot 3 AOT**, and **Redis Streams**.
+# 🚀 High-Concurrency Realtime Event Streams & AI Agent
+
+A high-performance, real-time event broadcasting system designed to handle massive concurrent Server-Sent Events (SSE) connections. This system seamlessly integrates an **Autonomous LLM Agent** that processes complex data using **Graph RAG** and a **Meta-Cognition Self-Correction Loop**, broadcasting AI-generated insights in real-time.
 
 ## 🎯 Project Motivation & Architecture
 
-Traditional thread-per-request models struggle with long-lived connections like SSE, often leading to thread exhaustion or high memory consumption. This project demonstrates how to overcome these limitations by leveraging modern Java features and robust message brokering.
+Traditional thread-per-request models struggle with long-lived connections like SSE. This project overcomes these limitations using modern Java features (Virtual Threads), while simultaneously integrating an advanced AI reasoning engine capable of self-reflection.
 
 ### Why This Tech Stack? (기술 도입 배경)
-* **Spring Boot 3 AOT & GraalVM:** Ahead-of-Time (AOT) compilation and native image generation drastically reduce the application's memory footprint and startup time. Combined with Virtual Threads, this creates an ultra-lightweight, highly scalable backend perfect for maintaining thousands of concurrent SSE connections in cloud-native environments.
-* **Java 21 Virtual Threads:** Traditional Tomcat allocates one OS thread per SSE connection. By enabling Virtual Threads, blocking operations (like waiting for new events) unmount the virtual thread from the carrier thread, allowing millions of concurrent connections with minimal memory footprint and zero context-switching overhead.
-* **Redis Streams:** Unlike standard Redis Pub/Sub (which is fire-and
+
+* **Spring Boot 3 AOT & Java 21 Virtual Threads:** Provides an ultra-lightweight, highly scalable backend capable of maintaining thousands of concurrent SSE connections with zero context-switching overhead.
+* **Redis Streams:** Acts as the central nervous system. It reliably buffers both standard system events and AI-generated insights, ensuring no messages are lost before they are broadcasted to clients via SSE.
+* **🧠 AI Meta-Cognition Agent (Python, LangGraph & Neo4j):** Instead of a simple chatbot, the Python backend serves as an intelligent reasoning engine utilizing an advanced **Graph RAG** architecture.
+* **Graph-based Retrieval (Neo4j):** Understands complex relationships between data points, providing deep contextual grounding rather than simple keyword matching.
+* **Self-Correction Loop (Reflexion):** Built with LangGraph (or n8n), the LLM agent autonomously evaluates its own answers (Self-Reflection). If an answer lacks context or hallucinates, the agent automatically rewrites the query and retrieves data again until it reaches a high-confidence conclusion before publishing to Redis.
+
+
+
+---
+
+## 🛠️ Getting Started (실행 방법)
+
+### Python LLM Agent Setup (AI 에이전트 환경 설정)
+
+LangGraph, Neo4j 연동 및 LLM 데이터 처리를 위한 파이썬 환경 설정 방법입니다.
+
+**1. 가상환경 생성 (최초 1회만 수행)**
+
+```bash
+# Python 3.12 버전을 기준으로 .venv라는 이름의 가상환경을 생성합니다.
+python3.12 -m venv .venv
+
+```
+
+**2. 가상환경 활성화 (작업 시 매번 켜기)**
+
+```bash
+# Mac/Linux 기준
+source .venv/bin/activate
+
+# Windows의 경우: .venv\Scripts\activate
+
+```
+
+**3. 패키지 관리자 업데이트 및 의존성 설치**
+
+```bash
+# pip 업그레이드 (권장)
+pip install --upgrade pip
+
+# LangGraph, OpenAI, Neo4j 등 프로젝트에 필요한 패키지 일괄 설치
+pip install -r requirements.txt
+
+```
+
+환경 변수(.env) 설정 가이드와 Spring Boot 백엔드 실행 방법까지 모두 포함하여 README 문서의 다음 섹션들을 작성했습니다.
+
+각 파트(Redis, AI 에이전트, Spring Boot)가 원활하게 통신할 수 있도록 필수적인 설정값과 실행 명령어를 구조화했습니다. 앞서 작성한 파이썬 환경 설정 부분 아래에 이어서 붙여넣으시면 됩니다!
+
+---
+
+## ⚙️ Environment Variables (환경 변수 설정)
+
+시스템이 정상적으로 작동하기 위해 필요한 환경 변수입니다. 프로젝트 루트 디렉토리(또는 각 모듈 폴더)에 `.env` 파일을 생성하고 아래의 값들을 프로젝트 환경에 맞게 기입해 주세요.
+
+```env
+# ------------------------------
+# Redis Configuration (공통)
+# ------------------------------
+REDIS_HOST=localhost
+REDIS_PORT=6379
+
+# ------------------------------
+# Python LLM Agent Configuration (AI 에이전트용)
+# ------------------------------
+OPENAI_API_KEY=sk-your-openai-api-key
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=your-neo4j-password
+
+# ------------------------------
+# Spring Boot Configuration (백엔드용)
+# ------------------------------
+SERVER_PORT=8080
+
+```
+
+---
+
+## ☕ Spring Boot Backend Setup (백엔드 설정 및 실행)
+
+Spring Boot 서버는 Java 21의 Virtual Threads를 활용하여 대규모 SSE 연결을 논블로킹(Non-blocking) 방식으로 처리하고 Redis Streams의 메시지를 구독(Subscribe)합니다.
+
+**1. 필수 요구사항 (Prerequisites)**
+
+* JDK 21 이상 설치
+* (선택) GraalVM (Native Image 빌드 시 필요)
+* 로컬 환경에 Redis 서버 실행 중
+
+**2. Redis 서버 실행 (Docker 활용 시)**
+로컬에 Redis가 설치되어 있지 않다면, 도커를 이용해 백그라운드에서 빠르게 실행할 수 있습니다.
+
+```bash
+docker run -d --name redis-streams -p 6379:6379 redis:latest
+
+```
+
+**3. 애플리케이션 실행 (Gradle 기준)**
+
+```bash
+# 스프링 부트 프로젝트 디렉토리로 이동 (실제 경로에 맞게 수정)
+cd backend
+
+# Gradle Wrapper에 실행 권한 부여 (Mac/Linux)
+chmod +x gradlew
+
+# 스프링 부트 서버 빌드 및 실행
+./gradlew bootRun
+
+```
+
+**4. 🚀 AOT & Native Image 빌드 (고성능/초경량 배포용)**
+Spring Boot 3의 AOT(Ahead-of-Time) 컴파일과 GraalVM을 이용해 네이티브 이미지로 빌드하면, 시작 시간을 밀리초 단위로 단축하고 메모리 사용량을 극적으로 줄일 수 있습니다.
+
+```bash
+# Native Image 빌드 (시스템 리소스에 따라 시간이 다소 소요될 수 있습니다)
+./gradlew nativeCompile
+
+# 빌드된 네이티브 실행 파일 실행
+./build/native/nativeCompile/backend
+
+```

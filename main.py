@@ -1,7 +1,7 @@
 import os
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
-from dotenv import load_dotenv
+# from dotenv import load_dotenv
 from typing import TypedDict, List
 from pydantic import BaseModel, Field
 
@@ -15,7 +15,8 @@ from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
 
 # 1. 환경 변수 로드 (.env 파일에서 OPENAI_API_KEY 자동 인식)
-load_dotenv()
+# doppler를 사용하여 환경 변수를 관리하는 경우, load_dotenv()는 필요하지 않을 수 있습니다.
+# load_dotenv()
 
 # 2. LLM 초기화 (평가관 역할은 일관성이 중요하므로 temperature를 0으로 설정)
 llm = ChatOpenAI(model="gpt-4o", temperature=0)

@@ -1,5 +1,4 @@
 
-
 > A high-performance real-time SSE broadcasting system integrated with an autonomous LLM Agent, built with Java 21 Virtual Threads, Spring Boot 3, Redis Streams, Next.js, and Python (LangGraph/Neo4j).
 > (Java 21 가상 스레드, Spring Boot 3 AOT, Redis Streams, Next.js 및 자율형 LLM 에이전트로 구축된 고성능 실시간 SSE 브로드캐스팅 시스템)
 
@@ -27,7 +26,7 @@ Traditional thread-per-request models struggle with long-lived connections like 
 
 ### Python LLM Agent Setup (AI 에이전트 환경 설정)
 
-LangGraph, Neo4j 연동 및 LLM 데이터 처리를 위한 파이썬 환경 설정 방법입니다.
+LangGraph, Neo4j 연동 및 LLM 데이터 처리를 위한 파이썬 환경 설정 방법입니다. 본 프로젝트는 보안과 중앙 관리를 위해 **Doppler**를 사용하여 환경 변수를 주입합니다.
 
 **1. 가상환경 생성 (최초 1회만 수행)**
 
@@ -53,20 +52,31 @@ source .venv/bin/activate
 # pip 업그레이드 (권장)
 pip install --upgrade pip
 
-# LangGraph, OpenAI, Neo4j 등 프로젝트에 필요한 패키지 일괄 설치
+# LangGraph, OpenAI, FastAPI 등 프로젝트에 필요한 패키지 일괄 설치
 pip install -r requirements.txt
 
 ```
 
-환경 변수(.env) 설정 가이드와 Spring Boot 백엔드 실행 방법까지 모두 포함하여 README 문서의 다음 섹션들을 작성했습니다.
+**4. Doppler 연동 및 서버 실행**
 
-각 파트(Redis, AI 에이전트, Spring Boot)가 원활하게 통신할 수 있도록 필수적인 설정값과 실행 명령어를 구조화했습니다. 앞서 작성한 파이썬 환경 설정 부분 아래에 이어서 붙여넣으시면 됩니다!
+```bash
+# 1. Doppler CLI 설치 후 로그인 (최초 1회)
+doppler login
+
+# 2. 로컬 프로젝트와 Doppler 연결 (프로젝트 및 환경 선택)
+doppler setup
+
+# 3. Uvicorn으로 FastAPI 서버 실행 (Doppler가 런타임에 환경 변수 주입)
+doppler run -- uvicorn main:app --reload
+
+```
 
 ---
 
 ## ⚙️ Environment Variables (환경 변수 설정)
 
-시스템이 정상적으로 작동하기 위해 필요한 환경 변수입니다. 프로젝트 루트 디렉토리(또는 각 모듈 폴더)에 `.env` 파일을 생성하고 아래의 값들을 프로젝트 환경에 맞게 기입해 주세요.
+본 프로젝트는 보안을 위해 로컬 `.env` 파일을 사용하지 않고 **Doppler** 대시보드를 통해 환경 변수를 관리합니다. 프로젝트 세팅 시 Doppler 대시보드에 아래의 키값들을 등록해 주세요.
+*(Doppler를 사용하지 않는 환경이라면 루트 디렉토리에 `.env` 파일을 생성하고 기입합니다.)*
 
 ```env
 # ------------------------------

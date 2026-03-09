@@ -5,6 +5,10 @@ from dotenv import load_dotenv
 from typing import TypedDict, List
 from pydantic import BaseModel, Field
 
+# --- [NEW] FastAPI 관련 패키지 추가 ---
+from fastapi import FastAPI, HTTPException
+import uvicorn
+
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -47,41 +51,43 @@ def retrieve_node(state: AgentState):
 
 def generate_node(state: AgentState):
     print("\n[생성] 답변 초안 작성 중...")
-    
+
     prompt = ChatPromptTemplate.from_messages([
         ("system", "당신은 제공된 문서(Context)를 바탕으로 사용자의 질문에 답하는 유능한 어시스턴트입니다.\n문서: {context}"),
         ("user", "질문: {question}")
     ])
-    
+
     chain = prompt | llm | StrOutputParser()
     context_str = "\n".join(state["documents"])
-    
+
     generation = chain.invoke({"context": context_str, "question": state["question"]})
     print(f"💡 답변 초안: {generation}")
-    
+
     return {"generation": generation}
 
 def evaluate_node(state: AgentState):
     print("\n[평가] 환각 여부 및 품질 검증 중...")
-    
+
     prompt = ChatPromptTemplate.from_messages([
         ("system", """당신은 사실 관계를 검증하는 깐깐한 감사관입니다.
         '생성된 답변'이 오직 '제공된 문서'에만 기반했는지 확인하세요.
         문서에 없는 내용(예: 구체적인 금액 등)을 임의로 지어냈다면 무조건 'Fail'을 부여하세요.
-        """),
+        평가 기준:
+        1) 문서에 명시된 정보만 사용했는가? (Pass/Fail)
+        2) 평가 이유를 간단히 설명 (1~2문장)"""),
         ("user", "제공된 문서: {context}\n\n생성된 답변: {generation}")
     ])
-    
+
     # LLM이 무조건 GradeOutput(Pydantic) 형태의 JSON을 반환하도록 강제
     structured_llm = llm.with_structured_output(GradeOutput)
     chain = prompt | structured_llm
-    
+
     context_str = "\n".join(state["documents"])
     result = chain.invoke({"context": context_str, "generation": state["generation"]})
-    
+
     feedback_str = f"{result.score}: {result.reason}"
     print(f"⚖️ 평가 결과: {feedback_str}")
-    
+
     return {"feedback": feedback_str}
 
 def rewrite_query_node(state: AgentState):
@@ -93,18 +99,14 @@ def rewrite_query_node(state: AgentState):
         이전 검색이 실패한 이유(피드백)를 분석하여, DB에서 정답을 찾을 수 있는 **새로운 검색 쿼리**를 작성하세요.
         문장이 아닌, 검색 매칭률이 높은 '핵심 키워드' 위주로 재구성하는 것이 좋습니다."""),
         ("user", "원래 질문: {question}\n\n이전 평가 피드백: {feedback}")
-    ])    
-
+    ])
     # LLM이 무조건 RewriteOutput(Pydantic) 형태의 JSON을 반환하도록 강제
     structured_llm = llm.with_structured_output(RewriteOutput)
     chain = prompt | structured_llm
 
     # 현재 상태의 질문과 피드백을 LLM에 전달하여 개선된 검색어를 받아옵니다.
     result = chain.invoke({"question": state['question'], "feedback": state["feedback"]})
-
-    print(f"🔄 새 검색어 적용: '{result.improved_query}'")
-    print(f"💡 변경 이유: {result.reasoning}")
-
+    print(f"🔄 새 검색어 적용: '{result.improved_query}'\n💡 변경 이유: {result.reasoning}")
     return {"question": result.improved_query, "retry_count": state["retry_count"] + 1}
 
 # ==========================================
@@ -120,6 +122,7 @@ def route_evaluation(state: AgentState):
     else:
         return "rewrite"
 
+# 그래프 조립 (변수명을 app -> graph_app으로 변경)
 workflow = StateGraph(AgentState)
 workflow.add_node("retrieve", retrieve_node)
 workflow.add_node("generate", generate_node)
@@ -132,14 +135,46 @@ workflow.add_edge("generate", "evaluate")
 workflow.add_conditional_edges("evaluate", route_evaluation, {"end": END, "rewrite": "rewrite_query"})
 workflow.add_edge("rewrite_query", "retrieve")
 
-app = workflow.compile()
+graph_app = workflow.compile()
+
 
 # ==========================================
-# 실행 테스트
+# [NEW] FastAPI 서버 설정 및 API 엔드포인트
 # ==========================================
+app = FastAPI(title="LangGraph Meta-Cognition API", version="1.0")
+
+# API 요청/응답 모델 정의
+class ChatRequest(BaseModel):
+    question: str = Field(..., example="올해 체력단련비 지원 한도가 얼마야?")
+
+class ChatResponse(BaseModel):
+    answer: str
+    final_query: str
+    retry_count: int
+
+@app.post("/api/chat", response_model=ChatResponse)
+def chat_endpoint(request: ChatRequest):
+    try:
+        print(f"\n🚀 [API 요청 수신] 질문: {request.question}")
+        initial_state = {
+            "question": request.question,
+            "retry_count": 0
+        }
+        
+        # LangGraph 워크플로우 실행
+        result = graph_app.invoke(initial_state)
+        
+        # Spring Boot 등으로 보낼 최종 응답 생성
+        return ChatResponse(
+            answer=result.get("generation", "답변을 생성하지 못했습니다."),
+            final_query=result.get("question", request.question),
+            retry_count=result.get("retry_count", 0)
+        )
+    except Exception as e:
+        print(f"❌ [에러 발생] {str(e)}")
+        raise HTTPException(status_code=500, detail="AI 에이전트 처리 중 오류가 발생했습니다.")
+
+# 서버 실행 (터미널에서 직접 실행 시)
 if __name__ == "__main__":
-    initial_state = {
-        "question": "올해 체력단련비 지원 한도가 얼마야?",
-        "retry_count": 0
-    }
-    app.invoke(initial_state)
+    # Spring Boot(8080)와 포트 충돌을 피하기 위해 8000번 포트 사용
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  # 1. 인메모리 메시지 브로커 (Spring Boot SSE 통신용)
+  redis:
+    image: redis:latest
+    container_name: redis-streams
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+
+  # 2. 지식 그래프 데이터베이스 (Graph RAG용)
+  neo4j:
+    image: neo4j:latest
+    container_name: neo4j-graph
+    ports:
+      - "7474:7474" # 웹 브라우저 UI 포트
+      - "7687:7687" # Bolt 드라이버 통신 포트
+    environment:
+      - NEO4J_AUTH=neo4j/password
+    restart: unless-stopped
+    volumes:
+      - neo4j-data:/data
+
+  # 3. LangGraph 기반 메타인지 AI 에이전트
+  ai-agent:
+    build: .  # 현재 폴더의 Dockerfile을 사용해 이미지를 빌드합니다.
+    container_name: ai-agent-api
+    ports:
+      - "8000:8000"
+    environment:
+      # 호스트 PC의 환경 변수(DOPPLER_TOKEN)를 컨테이너 안으로 전달합니다.
+      - DOPPLER_TOKEN=${DOPPLER_TOKEN}
+      # [중요] 도커 네트워크 내부에서는 'localhost' 대신 컨테이너 이름('neo4j')으로 통신해야 합니다.
+      # Doppler의 설정값보다 우선 적용되도록 런타임 환경 변수로 덮어씌웁니다.
+      - NEO4J_URI=bolt://neo4j:7687
+    depends_on:
+      - redis
+      - neo4j
+    restart: unless-stopped
+
+# 컨테이너가 삭제되어도 데이터가 날아가지 않도록 볼륨(저장소)을 매핑합니다.
+volumes:
+  redis-data:
+  neo4j-data:

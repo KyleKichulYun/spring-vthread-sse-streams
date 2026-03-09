@@ -13,6 +13,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
+from neo4j import GraphDatabase
 
 # 1. 환경 변수 로드 (.env 파일에서 OPENAI_API_KEY 자동 인식)
 # doppler를 사용하여 환경 변수를 관리하는 경우, load_dotenv()는 필요하지 않을 수 있습니다.
@@ -44,11 +45,34 @@ class RewriteOutput(BaseModel):
 # 노드(Node) 실제 구현
 # ==========================================
 def retrieve_node(state: AgentState):
-    # (일단 테스트용 가짜 문서 주입)
-    print(f"\n[검색] 검색어: '{state['question']}'")
-    # 일부러 환각을 유도하기 위해 문서에는 '한도' 금액을 적지 않았습니다.
-    mock_docs = ["2024년 복지 가이드: 올해 체력단련비 지원 제도가 신설되었습니다. 구체적인 한도는 인사팀에 문의하세요."]
-    return {"documents": mock_docs, "retry_count": state.get("retry_count", 0)}
+    question = state['question']
+    print(f"\n[DB 검색] 질문: '{question}'에 대한 관련 문서 검색 중...")
+
+    # 띄어쓰기 기준으로 키워드를 분리 (간단한 키워드 매칭용)
+    keywords = question.split()
+
+    # [Cyper 쿼리 예시 - 실제 DB 스키마에 맞게 조정 필요]
+    # 예: MATCH (d:Document) WHERE any(keyword IN $keywords WHERE d.content CONTAINS keyword) RETURN d
+    cypher_query = """
+    MATCH (d:Document)
+    WHERE any(keyword IN $keywords WHERE d.content CONTAINS keyword OR d.title CONTAINS keyword)
+    RETURN d.content AS content
+    LIMIT 3
+    """
+
+    # Neo4j에서 쿼리 실행
+    with neo4j_driver.session() as session:
+        result = session.run(cypher_query, keywords=keywords)
+        documents = [record["content"] for record in result]
+
+    # 검색된 문서가 없을 경우 빈 배열 대신 안내 문구 전달 (LLM이 인식할 수 있도록)
+    if not documents:
+        print("⚠️ 관련 문서가 검색되지 않았습니다. LLM이 환각을 유도할 수 있으므로, 빈 문서 대신 안내 메시지를 제공합니다.")
+        documents = ["관련 문서가 검색되지 않았습니다. 질문을 더 구체적으로 수정해보세요."]
+    else:
+        print(f"✅ {len(documents)}개의 관련 문서 검색 완료.")
+
+    return {"documents": documents, "retry_count": state.get("retry_count", 0)}
 
 def generate_node(state: AgentState):
     print("\n[생성] 답변 초안 작성 중...")
@@ -179,3 +203,17 @@ def chat_endpoint(request: ChatRequest):
 if __name__ == "__main__":
     # Spring Boot(8080)와 포트 충돌을 피하기 위해 8000번 포트 사용
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
+
+from neo4j import GraphDatabase
+
+# Neo4j 드라이버 세팅
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
+
+try:
+    neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD))
+    print("✅ Neo4j DB 연결 성공!")
+except Exception as e:
+    print(f"❌ Neo4j 연결 실패: {e}")

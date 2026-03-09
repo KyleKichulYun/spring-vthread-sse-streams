@@ -1,4 +1,5 @@
 
+
 > A high-performance real-time SSE broadcasting system integrated with an autonomous LLM Agent, built with Java 21 Virtual Threads, Spring Boot 3, Redis Streams, Next.js, and Python (LangGraph/Neo4j).
 > (Java 21 가상 스레드, Spring Boot 3 AOT, Redis Streams, Next.js 및 자율형 LLM 에이전트로 구축된 고성능 실시간 SSE 브로드캐스팅 시스템)
 
@@ -57,16 +58,27 @@ pip install -r requirements.txt
 
 ```
 
-**4. Doppler 연동 및 서버 실행**
+**4. 🐳 인프라 전체 실행 (Docker Compose - 권장)**
+명령어 한 줄로 `AI 에이전트(FastAPI)`, `Neo4j DB`, `Redis`를 한 번에 백그라운드에서 실행합니다.
 
 ```bash
-# 1. Doppler CLI 설치 후 로그인 (최초 1회)
-doppler login
+# 1. 환경 변수로 Doppler 토큰 세팅 (자신의 토큰 값으로 변경)
+export DOPPLER_TOKEN="dp.st.dev.xxxx..."
 
-# 2. 로컬 프로젝트와 Doppler 연결 (프로젝트 및 환경 선택)
+# 2. 백그라운드(-d)로 3개의 서버 동시 빌드 및 실행!
+docker-compose up -d --build
+
+```
+
+**5. 💻 로컬 단독 실행 (개발용)**
+도커를 사용하지 않고 파이썬 코드만 로컬에서 바로 돌려보고 싶을 때 사용합니다.
+
+```bash
+# 1. Doppler CLI 설치 후 로그인 및 셋업 (최초 1회)
+doppler login
 doppler setup
 
-# 3. Uvicorn으로 FastAPI 서버 실행 (Doppler가 런타임에 환경 변수 주입)
+# 2. Uvicorn으로 FastAPI 서버 실행 (Doppler가 런타임에 환경 변수 주입)
 doppler run -- uvicorn main:app --reload
 
 ```
@@ -110,17 +122,9 @@ Spring Boot 서버는 Java 21의 Virtual Threads를 활용하여 대규모 SSE �
 
 * JDK 21 이상 설치
 * (선택) GraalVM (Native Image 빌드 시 필요)
-* 로컬 환경에 Redis 서버 실행 중
+* **주의:** `docker-compose up`을 실행했다면 이미 Redis가 6379 포트에서 구동 중이므로 바로 2번으로 넘어갑니다.
 
-**2. Redis 서버 실행 (Docker 활용 시)**
-로컬에 Redis가 설치되어 있지 않다면, 도커를 이용해 백그라운드에서 빠르게 실행할 수 있습니다.
-
-```bash
-docker run -d --name redis-streams -p 6379:6379 redis:latest
-
-```
-
-**3. 애플리케이션 실행 (Gradle 기준)**
+**2. 애플리케이션 실행 (Gradle 기준)**
 
 ```bash
 # 스프링 부트 프로젝트 디렉토리로 이동 (실제 경로에 맞게 수정)
@@ -134,7 +138,7 @@ chmod +x gradlew
 
 ```
 
-**4. 🚀 AOT & Native Image 빌드 (고성능/초경량 배포용)**
+**3. 🚀 AOT & Native Image 빌드 (고성능/초경량 배포용)**
 Spring Boot 3의 AOT(Ahead-of-Time) 컴파일과 GraalVM을 이용해 네이티브 이미지로 빌드하면, 시작 시간을 밀리초 단위로 단축하고 메모리 사용량을 극적으로 줄일 수 있습니다.
 
 ```bash

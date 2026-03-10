@@ -1,0 +1,22 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: sse-agent-backend
+
+  # 🚀 [핵심] 톰캣이 OS 스레드 대신 Java 21 가상 스레드를 사용하도록 설정
+  threads:
+    virtual:
+      enabled: true
+
+  # 🐳 Redis 연결 설정 (Docker Compose 환경 변수 매핑)
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+# 🧠 Python AI 에이전트 통신 주소
+ai:
+  agent:
+    url: ${AI_AGENT_URL:http://localhost:8000/api/chat}

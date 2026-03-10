@@ -31,6 +31,10 @@ dependencies {
     // Redis: 메시지 브로커 (Streams) 연동용
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 
+    // 🚀 추가: JSON 직렬화를 위한 Jackson 라이브러리 명시적 선언
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+    implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+
     // Lombok: 보일러플레이트 코드 제거
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'

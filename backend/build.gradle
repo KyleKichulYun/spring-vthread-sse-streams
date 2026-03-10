@@ -1,0 +1,44 @@
+plugins {
+    id 'java'
+    // 🚀 2026년 최신 4세대 Spring Boot (Spring Framework 7 기반)
+    id 'org.springframework.boot' version '4.0.3'
+    id 'io.spring.dependency-management' version '1.1.7'
+    id 'org.graalvm.buildtools.native' version '0.10.4' // 최신 GraalVM 네이티브 최적화
+}
+
+group = 'com.kylelab'
+version = '0.0.1-SNAPSHOT'
+
+java {
+    // Java 21 명시 (Spring Boot 4.0과 찰떡궁합입니다)
+    sourceCompatibility = '21'
+}
+
+configurations {
+    compileOnly {
+        extendsFrom annotationProcessor
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Web: REST API 및 SSE 통신용
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+
+    // Redis: 메시지 브로커 (Streams) 연동용
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+
+    // Lombok: 보일러플레이트 코드 제거
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+
+    // Test
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}

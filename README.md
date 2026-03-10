@@ -1,5 +1,3 @@
-
-
 > A high-performance real-time SSE broadcasting system integrated with an autonomous LLM Agent, built with Java 21 Virtual Threads, Spring Boot 3, Redis Streams, Next.js, and Python (LangGraph/Neo4j).
 > (Java 21 가상 스레드, Spring Boot 3 AOT, Redis Streams, Next.js 및 자율형 LLM 에이전트로 구축된 고성능 실시간 SSE 브로드캐스팅 시스템)
 
@@ -20,6 +18,40 @@ Traditional thread-per-request models struggle with long-lived connections like 
 * **Self-Correction Loop (Reflexion):** Built with LangGraph (or n8n), the LLM agent autonomously evaluates its own answers (Self-Reflection). If an answer lacks context or hallucinates, the agent automatically rewrites the query and retrieves data again until it reaches a high-confidence conclusion before publishing to Redis.
 
 
+
+---
+
+## 📂 Project Structure & Data Flow (프로젝트 구조 및 데이터 흐름)
+
+본 프로젝트는 언어와 프레임워크의 장점을 극대화하기 위해 3개의 독립적인 서비스로 구성된 **폴리글랏 모노레포(Polyglot Monorepo)** 아키텍처를 채택했습니다.
+
+### Directory Tree
+
+```text
+polyglot-sse-project/          # Root Directory
+├── docker-compose.yml         # 🐳 인프라 전체 통합 실행 (AI, Redis, Neo4j)
+│
+├── 🐍 agent/                  # [Python] 메타인지 AI 에이전트 (FastAPI + LangGraph)
+│   ├── main.py                # AI 두뇌 로직 및 REST API 엔드포인트
+│   └── Dockerfile             # 에이전트 배포용 도커 파일
+│
+├── ☕ backend/                # [Java] 실시간 스트리밍 서버 (Spring Boot 3 + Virtual Threads)
+│   ├── build.gradle           # 의존성 및 AOT/Native 빌드 설정
+│   └── src/main/java/.../     # Controllers, Services, Redis Pub/Sub, RestClient
+│
+└── ⚛️ frontend/               # [TypeScript] 사용자 웹 UI (Next.js - 예정)
+    └── app/                   # 채팅 UI 및 SSE 구독(Subscribe) 훅
+
+```
+
+### 🔄 How It Works (데이터 흐름)
+
+1. **사용자 입력 (`frontend`):** 사용자가 Next.js 화면에서 질문을 입력합니다.
+2. **요청 접수 (`backend`):** Spring Boot가 `/api/chat`을 통해 질문을 받습니다. 이때 가상 스레드(Virtual Threads)가 할당되어 리소스를 최소화합니다.
+3. **AI 호출 (`backend` -> `agent`):** Spring Boot의 `RestClient`가 Python FastAPI 서버(`http://localhost:8000/api/chat`)로 질문을 전달합니다.
+4. **AI 사고 및 검색 (`agent`):** Python 에이전트가 **Neo4j**에서 Graph RAG 검색을 수행하고, 환각을 스스로 평가(Meta-Cognition)하여 완벽한 답변을 생성한 뒤 반환합니다.
+5. **메시지 발행 (`backend`):** Spring Boot가 AI의 정답을 받아 **Redis Streams**에 발행(Publish)합니다.
+6. **실시간 브로드캐스팅 (`backend` -> `frontend`):** Spring Boot의 Redis Listener가 새 메시지를 감지하고, **SSE(Server-Sent Events)**를 통해 구독 중인 모든 클라이언트 화면에 실시간으로 전송합니다.
 
 ---
 

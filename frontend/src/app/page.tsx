@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useSSE } from '@/hooks/useSSE';
 import { Send, Bot, User, Sparkles } from 'lucide-react';
 
@@ -34,6 +34,16 @@ export default function ChatPage() {
       }]);
     }
   }, [latestAiResponse]);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // 🚀 메시지가 추가될 때마다 하단으로 자동 스크롤
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages, isSending]); // 메시지 목록이나 전송 상태가 바뀔 때 실행
+  
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -75,7 +85,10 @@ export default function ChatPage() {
         </div>
 
         {/* Chat Content */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-[#F8FAFC]">
+        <div 
+          ref={scrollRef} /* 🚀 1. 여기에 ref를 꼭 달아주셔야 자동 스크롤이 작동합니다! */
+          className="flex-1 overflow-y-auto p-6 space-y-6 bg-[#F8FAFC] scroll-smooth"
+        >
           {messages.length === 0 && (
             <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-2">
               <Bot size={48} className="opacity-20" />
@@ -104,6 +117,21 @@ export default function ChatPage() {
               </div>
             </div>
           ))}
+
+          {/* 🚀 2. AI가 생각 중일 때 보여줄 타이핑 인디케이터 (메시지 맵핑 바로 아래에 추가) */}
+          {isSending && (
+            <div className="flex justify-start">
+              <div className="bg-white border border-slate-200 p-4 rounded-2xl rounded-tl-none shadow-sm flex items-center gap-3">
+                <Bot size={16} className="text-blue-500 animate-pulse" />
+                <span className="text-sm text-slate-500 font-medium">AI 에이전트가 사고 중입니다</span>
+                <div className="flex gap-1.5 ml-1">
+                  <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                  <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                  <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"></span>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Input Field */}

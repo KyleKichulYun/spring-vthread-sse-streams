@@ -1,38 +1,56 @@
 import os
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
-# from dotenv import load_dotenv
-from typing import TypedDict, List
+from typing import TypedDict, List, Annotated
+import operator
 from pydantic import BaseModel, Field
 
-# --- [NEW] FastAPI 관련 패키지 추가 ---
+# --- FastAPI 관련 패키지 ---
 from fastapi import FastAPI, HTTPException
 import uvicorn
 
+# --- LangChain & LangGraph ---
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
+from langgraph.graph.message import add_messages # 🚀 핵심: 메시지를 누적하는 함수
 from langgraph.checkpoint.memory import MemorySaver
+
+# --- Neo4j ---
 from neo4j import GraphDatabase
 
-# 1. 환경 변수 로드 (.env 파일에서 OPENAI_API_KEY 자동 인식)
-# doppler를 사용하여 환경 변수를 관리하는 경우, load_dotenv()는 필요하지 않을 수 있습니다.
-# load_dotenv()
+# ==========================================
+# 0. 초기 셋업 (DB & LLM)
+# ==========================================
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 
-# 2. LLM 초기화 (평가관 역할은 일관성이 중요하므로 temperature를 0으로 설정)
+try:
+    neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD))
+    print("✅ Neo4j DB 연결 성공!")
+except Exception as e:
+    print(f"❌ Neo4j 연결 실패: {e}")
+
 llm = ChatOpenAI(model="gpt-4o", temperature=0)
 
-# 3. 상태(State) 정의
+# ==========================================
+# 1. 상태(State) 정의
+# ==========================================
 class AgentState(TypedDict):
-    question: str
+    # 🚀 핵심: messages 필드는 add_messages 리듀서를 통해 계속 누적(Append)됩니다.
+    messages: Annotated[list[BaseMessage], add_messages]
+    
+    question: str # 현재 처리 중인 질문
     documents: List[str]
     generation: str
     feedback: str
     retry_count: int
 
 # ==========================================
-# [핵심] Pydantic을 이용한 평가 결과 구조 강제
+# 2. 구조화된 출력 모델 (Pydantic)
 # ==========================================
 class GradeOutput(BaseModel):
     score: str = Field(description="평가 결과. 'Pass' 또는 'Fail'만 입력")
@@ -43,17 +61,14 @@ class RewriteOutput(BaseModel):
     reasoning: str = Field(description="왜 이렇게 검색어를 개선했는지 간단한 설명")
 
 # ==========================================
-# 노드(Node) 실제 구현
+# 3. 노드(Node) 구현
 # ==========================================
 def retrieve_node(state: AgentState):
-    question = state['question']
-    print(f"\n[DB 검색] 질문: '{question}'에 대한 관련 문서 검색 중...")
+    # state["messages"]의 가장 마지막 메시지가 현재 질문입니다.
+    current_question = state["messages"][-1].content if "question" not in state or not state["question"] else state["question"]
+    print(f"\n[DB 검색] 질문: '{current_question}'에 대한 관련 문서 검색 중...")
 
-    # 띄어쓰기 기준으로 키워드를 분리 (간단한 키워드 매칭용)
-    keywords = question.split()
-
-    # [Cyper 쿼리 예시 - 실제 DB 스키마에 맞게 조정 필요]
-    # 예: MATCH (d:Document) WHERE any(keyword IN $keywords WHERE d.content CONTAINS keyword) RETURN d
+    keywords = current_question.split()
     cypher_query = """
     MATCH (d:Document)
     WHERE any(keyword IN $keywords WHERE d.content CONTAINS keyword OR d.title CONTAINS keyword)
@@ -61,35 +76,45 @@ def retrieve_node(state: AgentState):
     LIMIT 3
     """
 
-    # Neo4j에서 쿼리 실행
-    with neo4j_driver.session() as session:
-        result = session.run(cypher_query, keywords=keywords)
-        documents = [record["content"] for record in result]
+    documents = []
+    try:
+        with neo4j_driver.session() as session:
+            result = session.run(cypher_query, keywords=keywords)
+            documents = [record["content"] for record in result]
+    except Exception as e:
+        print(f"DB 검색 중 에러: {e}")
 
-    # 검색된 문서가 없을 경우 빈 배열 대신 안내 문구 전달 (LLM이 인식할 수 있도록)
     if not documents:
-        print("⚠️ 관련 문서가 검색되지 않았습니다. LLM이 환각을 유도할 수 있으므로, 빈 문서 대신 안내 메시지를 제공합니다.")
+        print("⚠️ 관련 문서가 검색되지 않았습니다.")
         documents = ["관련 문서가 검색되지 않았습니다. 질문을 더 구체적으로 수정해보세요."]
     else:
         print(f"✅ {len(documents)}개의 관련 문서 검색 완료.")
 
-    return {"documents": documents, "retry_count": state.get("retry_count", 0)}
+    return {
+        "question": current_question, 
+        "documents": documents, 
+        "retry_count": state.get("retry_count", 0)
+    }
 
 def generate_node(state: AgentState):
     print("\n[생성] 답변 초안 작성 중...")
 
+    # 🚀 핵심: LLM에게 이전 대화 기록(messages)을 통째로 넘겨주어 문맥을 유지합니다.
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "당신은 제공된 문서(Context)를 바탕으로 사용자의 질문에 답하는 유능한 어시스턴트입니다.\n문서: {context}"),
-        ("user", "질문: {question}")
+        ("system", "당신은 제공된 문서(Context)와 이전 대화 기록을 바탕으로 사용자의 질문에 답하는 유능한 어시스턴트입니다.\n\n문서: {context}"),
+        # 이전 대화 내용들이 여기에 삽입됩니다 (랭체인이 자동 처리)
+        ("placeholder", "{messages}")
     ])
 
     chain = prompt | llm | StrOutputParser()
     context_str = "\n".join(state["documents"])
 
-    generation = chain.invoke({"context": context_str, "question": state["question"]})
+    # 실행 시 누적된 messages 전체를 전달
+    generation = chain.invoke({"context": context_str, "messages": state["messages"]})
     print(f"💡 답변 초안: {generation}")
 
-    return {"generation": generation}
+    # 최종 답변을 messages 배열에 AIMessage 형태로 추가하여 반환
+    return {"generation": generation, "messages": [AIMessage(content=generation)]}
 
 def evaluate_node(state: AgentState):
     print("\n[평가] 환각 여부 및 품질 검증 중...")
@@ -97,14 +122,13 @@ def evaluate_node(state: AgentState):
     prompt = ChatPromptTemplate.from_messages([
         ("system", """당신은 사실 관계를 검증하는 깐깐한 감사관입니다.
         '생성된 답변'이 오직 '제공된 문서'에만 기반했는지 확인하세요.
-        문서에 없는 내용(예: 구체적인 금액 등)을 임의로 지어냈다면 무조건 'Fail'을 부여하세요.
+        문서에 없는 내용을 지어냈다면 무조건 'Fail'을 부여하세요.
         평가 기준:
         1) 문서에 명시된 정보만 사용했는가? (Pass/Fail)
-        2) 평가 이유를 간단히 설명 (1~2문장)"""),
+        2) 평가 이유 (1~2문장)"""),
         ("user", "제공된 문서: {context}\n\n생성된 답변: {generation}")
     ])
 
-    # LLM이 무조건 GradeOutput(Pydantic) 형태의 JSON을 반환하도록 강제
     structured_llm = llm.with_structured_output(GradeOutput)
     chain = prompt | structured_llm
 
@@ -118,25 +142,22 @@ def evaluate_node(state: AgentState):
 
 def rewrite_query_node(state: AgentState):
     print("\n[재작성] 평가 실패. 검색어 수정 중...")
-    # (여기도 LLM을 붙일 수 있지만, 일단 테스트를 위해 문자열 추가로 대체)
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", """당신은 AI 에이전트의 검색 성능을 극대화하는 '전문 검색 전략가'입니다.
-        이전 검색이 실패한 이유(피드백)를 분석하여, DB에서 정답을 찾을 수 있는 **새로운 검색 쿼리**를 작성하세요.
-        문장이 아닌, 검색 매칭률이 높은 '핵심 키워드' 위주로 재구성하는 것이 좋습니다."""),
+        ("system", "당신은 AI 에이전트의 검색 성능을 극대화하는 '전문 검색 전략가'입니다. 이전 검색 실패 이유를 분석하여 새로운 핵심 키워드를 작성하세요."),
         ("user", "원래 질문: {question}\n\n이전 평가 피드백: {feedback}")
     ])
-    # LLM이 무조건 RewriteOutput(Pydantic) 형태의 JSON을 반환하도록 강제
+    
     structured_llm = llm.with_structured_output(RewriteOutput)
     chain = prompt | structured_llm
 
-    # 현재 상태의 질문과 피드백을 LLM에 전달하여 개선된 검색어를 받아옵니다.
     result = chain.invoke({"question": state['question'], "feedback": state["feedback"]})
     print(f"🔄 새 검색어 적용: '{result.improved_query}'\n💡 변경 이유: {result.reasoning}")
+    
     return {"question": result.improved_query, "retry_count": state["retry_count"] + 1}
 
 # ==========================================
-# 라우팅 및 그래프 조립
+# 4. 라우팅 및 그래프 조립
 # ==========================================
 def route_evaluation(state: AgentState):
     if "Pass" in state["feedback"]:
@@ -148,7 +169,6 @@ def route_evaluation(state: AgentState):
     else:
         return "rewrite"
 
-# 그래프 조립 (변수명을 app -> graph_app으로 변경)
 workflow = StateGraph(AgentState)
 workflow.add_node("retrieve", retrieve_node)
 workflow.add_node("generate", generate_node)
@@ -164,17 +184,15 @@ workflow.add_edge("rewrite_query", "retrieve")
 # 🚀 1. 메모리 저장소 인스턴스 생성
 memory = MemorySaver()
 
-# 🚀 2. 컴파일 할 때 checkpointer로 메모리를 넘겨줍니다!
-# 기존: app = workflow.compile()
-app = workflow.compile(checkpointer=memory)
+# 🚀 2. 컴파일 할 때 checkpointer로 메모리를 넘겨줍니다! (이름을 graph_app으로 통일)
+graph_app = workflow.compile(checkpointer=memory)
 
 
 # ==========================================
-# [NEW] FastAPI 서버 설정 및 API 엔드포인트
+# 5. FastAPI 서버 설정 및 API 엔드포인트
 # ==========================================
 app = FastAPI(title="LangGraph Meta-Cognition API", version="1.0")
 
-# API 요청/응답 모델 정의
 class ChatRequest(BaseModel):
     question: str = Field(..., example="올해 체력단련비 지원 한도가 얼마야?")
     # 🚀 클라이언트가 스레드 ID를 주지 않으면 기본값으로 새 세션을 만듭니다.
@@ -187,28 +205,27 @@ class ChatResponse(BaseModel):
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
-    # 🚀 설정(config) 객체에 thread_id를 담아서 그래프에 전달합니다.
-    config = {"configurable": {"thread_id": request.thread_id}}
-    
-    # 사용자의 질문을 그래프에 입력
-    input_message = {"messages": [("user", request.question)]}
-    
-    # 🚀 그래프 실행 시 config를 반드시 같이 넘겨주어야 합니다!
-    # ainvoke 또는 astream 등 사용하시는 메서드에 맞게 config=config 를 추가해 주세요.
-    result = await app.ainvoke(input_message, config=config)
     try:
-        print(f"\n🚀 [API 요청 수신] 질문: {request.question}")
-        initial_state = {
-            "question": request.question,
+        print(f"\n🚀 [API 요청 수신] 질문: {request.question} (Thread: {request.thread_id})")
+        
+        # 🚀 설정(config) 객체에 thread_id를 담아서 그래프에 전달
+        config = {"configurable": {"thread_id": request.thread_id}}
+        
+        # 사용자의 새 질문을 HumanMessage 객체로 감싸서 전달
+        input_state = {
+            "messages": [HumanMessage(content=request.question)],
+            "question": request.question, # 명시적으로 세팅해 줍니다.
             "retry_count": 0
         }
         
-        # LangGraph 워크플로우 실행
-        result = graph_app.invoke(initial_state)
+        # 🚀 그래프 실행 (메모리 작동)
+        result = await graph_app.ainvoke(input_state, config=config)
         
-        # Spring Boot 등으로 보낼 최종 응답 생성
+        # 최종 답변 추출
+        final_answer = result.get("generation", "답변을 생성하지 못했습니다.")
+        
         return ChatResponse(
-            answer=result.get("generation", "답변을 생성하지 못했습니다."),
+            answer=final_answer,
             final_query=result.get("question", request.question),
             retry_count=result.get("retry_count", 0)
         )
@@ -216,21 +233,5 @@ async def chat_endpoint(request: ChatRequest):
         print(f"❌ [에러 발생] {str(e)}")
         raise HTTPException(status_code=500, detail="AI 에이전트 처리 중 오류가 발생했습니다.")
 
-# 서버 실행 (터미널에서 직접 실행 시)
 if __name__ == "__main__":
-    # Spring Boot(8080)와 포트 충돌을 피하기 위해 8000번 포트 사용
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
-
-
-from neo4j import GraphDatabase
-
-# Neo4j 드라이버 세팅
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
-
-try:
-    neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD))
-    print("✅ Neo4j DB 연결 성공!")
-except Exception as e:
-    print(f"❌ Neo4j 연결 실패: {e}")

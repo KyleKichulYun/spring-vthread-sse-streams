@@ -1,8 +1,12 @@
 package com.kylelab.sseagent.dto.request;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 public record ChatMessageRequest(
         String question,
-        // 🚀 추가: 프론트엔드에서 생성해서 보내줄 대화방 ID (없으면 기본값)
+
+        // 🚀 자바에서는 threadId로 쓰지만, JSON으로 바꿀 땐 "thread_id"로 바꿔라!
+        @JsonProperty("thread_id")
         String threadId
 ) {
     public ChatMessageRequest {

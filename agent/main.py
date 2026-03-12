@@ -13,6 +13,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
 from neo4j import GraphDatabase
 
 # 1. 환경 변수 로드 (.env 파일에서 OPENAI_API_KEY 자동 인식)
@@ -160,7 +161,12 @@ workflow.add_edge("generate", "evaluate")
 workflow.add_conditional_edges("evaluate", route_evaluation, {"end": END, "rewrite": "rewrite_query"})
 workflow.add_edge("rewrite_query", "retrieve")
 
-graph_app = workflow.compile()
+# 🚀 1. 메모리 저장소 인스턴스 생성
+memory = MemorySaver()
+
+# 🚀 2. 컴파일 할 때 checkpointer로 메모리를 넘겨줍니다!
+# 기존: app = workflow.compile()
+app = workflow.compile(checkpointer=memory)
 
 
 # ==========================================
@@ -171,6 +177,8 @@ app = FastAPI(title="LangGraph Meta-Cognition API", version="1.0")
 # API 요청/응답 모델 정의
 class ChatRequest(BaseModel):
     question: str = Field(..., example="올해 체력단련비 지원 한도가 얼마야?")
+    # 🚀 클라이언트가 스레드 ID를 주지 않으면 기본값으로 새 세션을 만듭니다.
+    thread_id: str = "default-session"    
 
 class ChatResponse(BaseModel):
     answer: str
@@ -178,7 +186,16 @@ class ChatResponse(BaseModel):
     retry_count: int
 
 @app.post("/api/chat", response_model=ChatResponse)
-def chat_endpoint(request: ChatRequest):
+async def chat_endpoint(request: ChatRequest):
+    # 🚀 설정(config) 객체에 thread_id를 담아서 그래프에 전달합니다.
+    config = {"configurable": {"thread_id": request.thread_id}}
+    
+    # 사용자의 질문을 그래프에 입력
+    input_message = {"messages": [("user", request.question)]}
+    
+    # 🚀 그래프 실행 시 config를 반드시 같이 넘겨주어야 합니다!
+    # ainvoke 또는 astream 등 사용하시는 메서드에 맞게 config=config 를 추가해 주세요.
+    result = await app.ainvoke(input_message, config=config)
     try:
         print(f"\n🚀 [API 요청 수신] 질문: {request.question}")
         initial_state = {

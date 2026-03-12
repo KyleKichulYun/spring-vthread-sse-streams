@@ -2,6 +2,7 @@ package com.kylelab.sseagent.service;
 
 import com.kylelab.sseagent.dto.request.ChatMessageRequest;
 import com.kylelab.sseagent.dto.response.AiAgentResponse;
+import lombok.Value;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -14,6 +15,11 @@ public class AiAgentService {
     private static final Logger log = LoggerFactory.getLogger(AiAgentService.class);
     private final RestClient aiAgentRestClient;
 
+    private static final Logger log = LoggerFactory.getLogger(AiAgentService.class);
+
+    @Value("${ai.agent.url:http://localhost:8000/api/chat}")
+    private String agentUrl;
+
     public AiAgentService(RestClient aiAgentRestClient) {
         this.aiAgentRestClient = aiAgentRestClient;
     }
@@ -21,11 +27,13 @@ public class AiAgentService {
     /**
      * Python AI 에이전트에게 질문을 던지고 답변을 받아옵니다.
      */
-    public AiAgentResponse askAgent(String question) {
-        log.info("🤖 AI 에이전트에게 질문 전송 중... [질문: {}]", question);
+    // 🚀 수정: 파라미터로 threadId도 같이 받습니다.
+    public AiAgentResponse askAgent(String question, String threadId) {
+        log.info("🤖 [AI Agent 호출] 질문: {}, 세션: {}", question, threadId);
 
         try {
-            ChatMessageRequest request = new ChatMessageRequest(question);
+            // 🚀 핵심: 파이썬이 기대하는 JSON 형식에 맞게 thread_id를 추가!
+            ChatMessageRequest request = new ChatMessageRequest(question, threadId);
 
             // 🚀 가상 스레드 매직: 이 HTTP 요청이 끝날 때까지 기다리는 동안
             // 톰캣 스레드가 멈추지 않고 다른 사용자의 요청을 처리하러 떠납니다!

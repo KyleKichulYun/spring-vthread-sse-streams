@@ -23,6 +23,14 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isSending, setIsSending] = useState(false);
   
+  // 🚀 추가: 컴포넌트가 처음 렌더링될 때 고유한 UUID를 발급합니다.
+  const [threadId] = useState(() => {
+    if (typeof window !== 'undefined' && window.crypto && window.crypto.randomUUID) {
+      return window.crypto.randomUUID();
+    }
+    return `session-${Math.random().toString(36).substr(2, 9)}`; // 폴백 로직
+  });
+
   const { data: latestAiResponse, isConnected, error } = useSSE('http://localhost:8080/api/stream');
 
   useEffect(() => {
@@ -46,7 +54,7 @@ export default function ChatPage() {
     }
   }, [messages, isSending]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!question.trim() || isSending || !isConnected) return;
 
@@ -59,7 +67,11 @@ export default function ChatPage() {
       await fetch('http://localhost:8080/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: userMsg }),
+        // 🚀 수정: 백엔드로 보낼 때 방금 만든 threadId를 같이 묶어서 보냅니다!
+        body: JSON.stringify({ 
+          question: userMsg,
+          threadId: threadId 
+        }),
       });
     } catch (err) {
       console.error("질문 전송 실패:", err);
@@ -67,7 +79,7 @@ export default function ChatPage() {
       setIsSending(false);
     }
   };
-
+  
   return (
     <main className="flex min-h-screen flex-col items-center p-4 md:p-8 bg-slate-50">
       <div className="w-full max-w-3xl bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[85vh]">

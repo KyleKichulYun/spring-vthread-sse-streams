@@ -29,10 +29,11 @@ public class ChatController {
 
     @PostMapping
     public ResponseEntity<String> askQuestion(@RequestBody ChatMessageRequest request) {
-        log.info("📩 [API 요청 수신] 사용자 질문: {}", request.question());
+        log.info("📩 [API 요청 수신] 질문: {}, 세션: {}", request.question(), request.threadId());
 
         // 1. AI 에이전트에게 질문하고 답변 받기 (Virtual Threads로 논블로킹 동작)
-        AiAgentResponse response = aiAgentService.askAgent(request.question());
+        // 🚀 수정: request에서 threadId를 꺼내서 같이 넘겨줍니다.
+        AiAgentResponse response = aiAgentService.askAgent(request.question(), request.threadId());
 
         // 2. 받은 답변을 Redis Streams 채널에 브로드캐스팅(Publish)
         redisPublisherService.publishAiResponse(response);

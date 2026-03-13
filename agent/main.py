@@ -1,6 +1,11 @@
 import os
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
+
+# 🚀 추가: dotenv를 임포트하고 바로 실행하여 환경변수를 로드합니다!
+from dotenv import load_dotenv
+load_dotenv()
+
 from typing import TypedDict, List, Annotated
 import operator
 from pydantic import BaseModel, Field
@@ -40,10 +45,14 @@ llm = ChatOpenAI(model="gpt-4o", temperature=0)
 # 1. 상태(State) 정의
 # ==========================================
 class AgentState(TypedDict):
-    # 🚀 핵심: messages 필드는 add_messages 리듀서를 통해 계속 누적(Append)됩니다.
     messages: Annotated[list[BaseMessage], add_messages]
     
-    question: str # 현재 처리 중인 질문
+    question: str # 사용자의 원래 질문 (고정)
+    
+    # 🚀 추가: 메타인지를 위한 검색어 추적 장치
+    search_query: str # 현재 DB 검색에 사용할 쿼리
+    past_queries: Annotated[list[str], operator.add] # 시도했던 검색어 히스토리 누적
+    
     documents: List[str]
     generation: str
     feedback: str
@@ -64,11 +73,13 @@ class RewriteOutput(BaseModel):
 # 3. 노드(Node) 구현
 # ==========================================
 def retrieve_node(state: AgentState):
-    # state["messages"]의 가장 마지막 메시지가 현재 질문입니다.
-    current_question = state["messages"][-1].content if "question" not in state or not state["question"] else state["question"]
-    print(f"\n[DB 검색] 질문: '{current_question}'에 대한 관련 문서 검색 중...")
+    # 🚀 수정: 메타인지가 수정한 'search_query'를 우선 사용 (없으면 원래 질문 사용)
+    current_query = state.get("search_query") or state["question"]
+    print(f"\n[DB 검색] 검색어: '{current_query}' (원래 질문: '{state['question']}')")
 
-    keywords = current_question.split()
+    # 검색어를 띄어쓰기 기준으로 분리하여 핵심 키워드만 추출
+    keywords = current_query.split()
+    
     cypher_query = """
     MATCH (d:Document)
     WHERE any(keyword IN $keywords WHERE d.content CONTAINS keyword OR d.title CONTAINS keyword)
@@ -91,8 +102,9 @@ def retrieve_node(state: AgentState):
         print(f"✅ {len(documents)}개의 관련 문서 검색 완료.")
 
     return {
-        "question": current_question, 
+        "search_query": current_query,
         "documents": documents, 
+        "past_queries": [current_query], # 🚀 추가: 시도한 검색어를 리듀서(operator.add)로 누적
         "retry_count": state.get("retry_count", 0)
     }
 
@@ -141,20 +153,36 @@ def evaluate_node(state: AgentState):
     return {"feedback": feedback_str}
 
 def rewrite_query_node(state: AgentState):
-    print("\n[재작성] 평가 실패. 검색어 수정 중...")
+    print("\n[재작성] 평가 실패. 메타인지 분석 및 검색어 수정 중...")
 
+    # 🚀 수정: 과거 실패 기록과 구체적인 지시사항을 포함한 프롬프트
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "당신은 AI 에이전트의 검색 성능을 극대화하는 '전문 검색 전략가'입니다. 이전 검색 실패 이유를 분석하여 새로운 핵심 키워드를 작성하세요."),
-        ("user", "원래 질문: {question}\n\n이전 평가 피드백: {feedback}")
+        ("system", """당신은 AI 에이전트의 검색 성능을 극대화하는 '전문 검색 전략가'입니다.
+        사용자의 원래 질문에 답하기 위해 DB를 검색했지만 실패했습니다.
+        
+        [반드시 지켜야 할 규칙]
+        1. 이전 평가 피드백을 분석하여 무엇이 부족했는지 파악하세요.
+        2. '시도했던 검색어'와 겹치지 않는 완전히 새로운 유의어나 더 포괄적인 단어를 선택하세요.
+        3. 문장 형태가 아닌, **띄어쓰기로만 구분된 2~3개의 핵심 명사 키워드**만 출력하세요. (예: "복지포인트 규정 금액")"""),
+        ("user", "원래 질문: {question}\n시도했던 검색어들: {past_queries}\n이전 평가 피드백: {feedback}")
     ])
     
     structured_llm = llm.with_structured_output(RewriteOutput)
     chain = prompt | structured_llm
 
-    result = chain.invoke({"question": state['question'], "feedback": state["feedback"]})
-    print(f"🔄 새 검색어 적용: '{result.improved_query}'\n💡 변경 이유: {result.reasoning}")
+    # 누적된 과거 검색어 배열을 보기 좋은 문자열로 변환
+    past_queries_str = ", ".join(state.get("past_queries", []))
     
-    return {"question": result.improved_query, "retry_count": state["retry_count"] + 1}
+    result = chain.invoke({
+        "question": state['question'], 
+        "past_queries": past_queries_str,
+        "feedback": state["feedback"]
+    })
+    
+    print(f"🔄 새 키워드 도출: '{result.improved_query}'\n💡 반성 및 변경 이유: {result.reasoning}")
+    
+    # 🚀 원래 질문(question)은 놔두고, 검색어(search_query)만 업데이트합니다.
+    return {"search_query": result.improved_query, "retry_count": state["retry_count"] + 1}
 
 # ==========================================
 # 4. 라우팅 및 그래프 조립
@@ -203,30 +231,31 @@ class ChatResponse(BaseModel):
     final_query: str
     retry_count: int
 
+# ==========================================
+# 5. FastAPI 서버 설정 및 API 엔드포인트
+# ==========================================
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
     try:
         print(f"\n🚀 [API 요청 수신] 질문: {request.question} (Thread: {request.thread_id})")
         
-        # 🚀 설정(config) 객체에 thread_id를 담아서 그래프에 전달
         config = {"configurable": {"thread_id": request.thread_id}}
         
-        # 사용자의 새 질문을 HumanMessage 객체로 감싸서 전달
+        # 🚀 수정: 최초 상태에 search_query를 질문과 동일하게 추가
         input_state = {
             "messages": [HumanMessage(content=request.question)],
-            "question": request.question, # 명시적으로 세팅해 줍니다.
+            "question": request.question, 
+            "search_query": request.question, # 첫 검색은 질문 그대로 시도
             "retry_count": 0
         }
         
-        # 🚀 그래프 실행 (메모리 작동)
         result = await graph_app.ainvoke(input_state, config=config)
         
-        # 최종 답변 추출
         final_answer = result.get("generation", "답변을 생성하지 못했습니다.")
         
         return ChatResponse(
             answer=final_answer,
-            final_query=result.get("question", request.question),
+            final_query=result.get("search_query", request.question), # 최종 검색어로 응답
             retry_count=result.get("retry_count", 0)
         )
     except Exception as e:

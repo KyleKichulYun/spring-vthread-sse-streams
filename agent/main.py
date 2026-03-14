@@ -45,6 +45,7 @@ llm = ChatOpenAI(model="gpt-4o", temperature=0)
 # 1. 상태(State) 정의
 # ==========================================
 class AgentState(TypedDict):
+    # 🚀 핵심: messages 필드는 add_messages 리듀서를 통해 계속 누적(Append)됩니다.
     messages: Annotated[list[BaseMessage], add_messages]
     
     question: str # 사용자의 원래 질문 (고정)
@@ -80,18 +81,29 @@ def retrieve_node(state: AgentState):
     # 검색어를 띄어쓰기 기준으로 분리하여 핵심 키워드만 추출
     keywords = current_query.split()
     
+    # 🚀 핵심: 노드 자체의 내용뿐만 아니라, 연결된(Relationship) 이웃 노드의 정보까지 끌어옵니다!
     cypher_query = """
-    MATCH (d:Document)
-    WHERE any(keyword IN $keywords WHERE d.content CONTAINS keyword OR d.title CONTAINS keyword)
-    RETURN d.content AS content
-    LIMIT 3
+    // 1. 키워드를 포함하는 핵심 노드(n) 찾기
+    MATCH (n)
+    WHERE any(keyword IN $keywords WHERE n.name CONTAINS keyword OR n.title CONTAINS keyword OR n.content CONTAINS keyword)
+    
+    // 2. 핵심 노드와 1-hop(직접 연결) 거리에 있는 이웃 노드(m)와 그 관계(r) 탐색
+    OPTIONAL MATCH (n)-[r]-(m)
+    
+    // 3. AI가 이해하기 쉬운 자연어 문맥 형태로 조합하여 반환
+    WITH n, r, m
+    RETURN coalesce(n.name, n.title, '핵심정보') + '은(는) ' + 
+           coalesce(m.name, m.title, '알 수 없는 대상') + '와(과) [' + type(r) + '] 관계입니다. ' +
+           '(상세내용: ' + coalesce(n.content, n.description, '내용 없음') + ')' AS context
+    LIMIT 10
     """
 
     documents = []
     try:
         with neo4j_driver.session() as session:
             result = session.run(cypher_query, keywords=keywords)
-            documents = [record["content"] for record in result]
+            # 쿼리 결과를 문자열 리스트로 변환
+            documents = [record["context"] for record in result if record["context"]]
     except Exception as e:
         print(f"DB 검색 중 에러: {e}")
 

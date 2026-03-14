@@ -87,14 +87,16 @@ def retrieve_node(state: AgentState):
     MATCH (n)
     WHERE any(keyword IN $keywords WHERE n.name CONTAINS keyword OR n.title CONTAINS keyword OR n.content CONTAINS keyword)
     
-    // 2. 핵심 노드와 1-hop(직접 연결) 거리에 있는 이웃 노드(m)와 그 관계(r) 탐색
+    // 2. 핵심 노드와 1-hop(직접 연결) 거리에 있는 이웃 노드(m) 탐색
     OPTIONAL MATCH (n)-[r]-(m)
     
-    // 3. AI가 이해하기 쉬운 자연어 문맥 형태로 조합하여 반환
+    // 3. 🚀 수정: 메인 노드의 내용뿐만 아니라 연결된(m) 노드의 상세 내용까지 완벽하게 조합
     WITH n, r, m
-    RETURN coalesce(n.name, n.title, '핵심정보') + '은(는) ' + 
-           coalesce(m.name, m.title, '알 수 없는 대상') + '와(과) [' + type(r) + '] 관계입니다. ' +
-           '(상세내용: ' + coalesce(n.content, n.description, '내용 없음') + ')' AS context
+    RETURN 
+      "[" + coalesce(n.name, n.title, '이름없음') + "] " + coalesce(n.content, n.description, '') + 
+      CASE WHEN m IS NOT NULL THEN 
+        " ➡️ (추가 관련 정보: " + coalesce(m.name, m.title, '') + " - " + coalesce(m.content, m.description, '') + ")"
+      ELSE "" END AS context
     LIMIT 10
     """
 

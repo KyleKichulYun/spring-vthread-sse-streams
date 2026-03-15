@@ -2,7 +2,7 @@ import os
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 
-# 🚀 추가: dotenv를 임포트하고 바로 실행하여 환경변수를 로드합니다!
+# 🚀 dotenv 로드
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -20,7 +20,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages # 🚀 핵심: 메시지를 누적하는 함수
+from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
 
 # --- Neo4j ---
@@ -45,15 +45,10 @@ llm = ChatOpenAI(model="gpt-4o", temperature=0)
 # 1. 상태(State) 정의
 # ==========================================
 class AgentState(TypedDict):
-    # 🚀 핵심: messages 필드는 add_messages 리듀서를 통해 계속 누적(Append)됩니다.
     messages: Annotated[list[BaseMessage], add_messages]
-    
-    question: str # 사용자의 원래 질문 (고정)
-    
-    # 🚀 추가: 메타인지를 위한 검색어 추적 장치
-    search_query: str # 현재 DB 검색에 사용할 쿼리
-    past_queries: Annotated[list[str], operator.add] # 시도했던 검색어 히스토리 누적
-    
+    question: str 
+    search_query: str 
+    past_queries: Annotated[list[str], operator.add] 
     documents: List[str]
     generation: str
     feedback: str
@@ -74,23 +69,16 @@ class RewriteOutput(BaseModel):
 # 3. 노드(Node) 구현
 # ==========================================
 def retrieve_node(state: AgentState):
-    # 🚀 수정: 메타인지가 수정한 'search_query'를 우선 사용 (없으면 원래 질문 사용)
     current_query = state.get("search_query") or state["question"]
     print(f"\n[DB 검색] 검색어: '{current_query}' (원래 질문: '{state['question']}')")
 
-    # 검색어를 띄어쓰기 기준으로 분리하여 핵심 키워드만 추출
     keywords = current_query.split()
     
-    # 🚀 핵심: 노드 자체의 내용뿐만 아니라, 연결된(Relationship) 이웃 노드의 정보까지 끌어옵니다!
+    # 🚀 어제(KYL-56) 완성한 가장 완벽한 Graph RAG Cypher 쿼리!
     cypher_query = """
-    // 1. 키워드를 포함하는 핵심 노드(n) 찾기
     MATCH (n)
     WHERE any(keyword IN $keywords WHERE n.name CONTAINS keyword OR n.title CONTAINS keyword OR n.content CONTAINS keyword)
-    
-    // 2. 핵심 노드와 1-hop(직접 연결) 거리에 있는 이웃 노드(m) 탐색
     OPTIONAL MATCH (n)-[r]-(m)
-    
-    // 3. 🚀 수정: 메인 노드의 내용뿐만 아니라 연결된(m) 노드의 상세 내용까지 완벽하게 조합
     WITH n, r, m
     RETURN 
       "[" + coalesce(n.name, n.title, '이름없음') + "] " + coalesce(n.content, n.description, '') + 
@@ -104,7 +92,6 @@ def retrieve_node(state: AgentState):
     try:
         with neo4j_driver.session() as session:
             result = session.run(cypher_query, keywords=keywords)
-            # 쿼리 결과를 문자열 리스트로 변환
             documents = [record["context"] for record in result if record["context"]]
     except Exception as e:
         print(f"DB 검색 중 에러: {e}")
@@ -113,53 +100,57 @@ def retrieve_node(state: AgentState):
         print("⚠️ 관련 문서가 검색되지 않았습니다.")
         documents = ["관련 문서가 검색되지 않았습니다. 질문을 더 구체적으로 수정해보세요."]
     else:
-        print(f"✅ {len(documents)}개의 관련 문서 검색 완료.")
+        print(f"✅ {len(documents)}개의 그래프 문맥(Context) 검색 완료.")
 
     return {
         "search_query": current_query,
         "documents": documents, 
-        "past_queries": [current_query], # 🚀 추가: 시도한 검색어를 리듀서(operator.add)로 누적
+        "past_queries": [current_query], 
         "retry_count": state.get("retry_count", 0)
     }
 
 def generate_node(state: AgentState):
     print("\n[생성] 답변 초안 작성 중...")
 
-    # 🚀 핵심: LLM에게 이전 대화 기록(messages)을 통째로 넘겨주어 문맥을 유지합니다.
     prompt = ChatPromptTemplate.from_messages([
         ("system", "당신은 제공된 문서(Context)와 이전 대화 기록을 바탕으로 사용자의 질문에 답하는 유능한 어시스턴트입니다.\n\n문서: {context}"),
-        # 이전 대화 내용들이 여기에 삽입됩니다 (랭체인이 자동 처리)
         ("placeholder", "{messages}")
     ])
 
     chain = prompt | llm | StrOutputParser()
     context_str = "\n".join(state["documents"])
 
-    # 실행 시 누적된 messages 전체를 전달
     generation = chain.invoke({"context": context_str, "messages": state["messages"]})
     print(f"💡 답변 초안: {generation}")
 
-    # 최종 답변을 messages 배열에 AIMessage 형태로 추가하여 반환
     return {"generation": generation, "messages": [AIMessage(content=generation)]}
 
 def evaluate_node(state: AgentState):
-    print("\n[평가] 환각 여부 및 품질 검증 중...")
+    print("\n[평가] 환각 여부 및 질문 해결 완벽성 검증 중...")
 
+    # 🚀 오늘(KYL-57) 업그레이드한 이중 검증 프롬프트!
     prompt = ChatPromptTemplate.from_messages([
-        ("system", """당신은 사실 관계를 검증하는 깐깐한 감사관입니다.
-        '생성된 답변'이 오직 '제공된 문서'에만 기반했는지 확인하세요.
-        문서에 없는 내용을 지어냈다면 무조건 'Fail'을 부여하세요.
-        평가 기준:
-        1) 문서에 명시된 정보만 사용했는가? (Pass/Fail)
-        2) 평가 이유 (1~2문장)"""),
-        ("user", "제공된 문서: {context}\n\n생성된 답변: {generation}")
+        ("system", """당신은 깐깐한 AI 품질 검증관(QA)입니다.
+        생성된 답변이 다음 두 가지 기준을 모두 완벽히 통과하는지 엄격하게 평가하세요.
+
+        [평가 기준]
+        1. 사실성(Factuality): '생성된 답변'이 오직 '제공된 문서'에만 기반했는가? (문서에 없는 내용을 조금이라도 지어냈다면 무조건 Fail)
+        2. 관련성(Relevance): '생성된 답변'이 사용자의 '원래 질문'에 대한 답을 명확하고 완벽하게 제공했는가? (동문서답이거나 정보가 부족하면 Fail)
+
+        위 두 기준을 모두 만족해야만 'Pass'를 부여하고, 하나라도 부족하면 'Fail'을 부여하세요."""),
+        ("user", "원래 질문: {question}\n\n제공된 문서: {context}\n\n생성된 답변: {generation}")
     ])
 
     structured_llm = llm.with_structured_output(GradeOutput)
     chain = prompt | structured_llm
 
     context_str = "\n".join(state["documents"])
-    result = chain.invoke({"context": context_str, "generation": state["generation"]})
+    
+    result = chain.invoke({
+        "question": state["question"], 
+        "context": context_str, 
+        "generation": state["generation"]
+    })
 
     feedback_str = f"{result.score}: {result.reason}"
     print(f"⚖️ 평가 결과: {feedback_str}")
@@ -169,7 +160,6 @@ def evaluate_node(state: AgentState):
 def rewrite_query_node(state: AgentState):
     print("\n[재작성] 평가 실패. 메타인지 분석 및 검색어 수정 중...")
 
-    # 🚀 수정: 과거 실패 기록과 구체적인 지시사항을 포함한 프롬프트
     prompt = ChatPromptTemplate.from_messages([
         ("system", """당신은 AI 에이전트의 검색 성능을 극대화하는 '전문 검색 전략가'입니다.
         사용자의 원래 질문에 답하기 위해 DB를 검색했지만 실패했습니다.
@@ -184,7 +174,6 @@ def rewrite_query_node(state: AgentState):
     structured_llm = llm.with_structured_output(RewriteOutput)
     chain = prompt | structured_llm
 
-    # 누적된 과거 검색어 배열을 보기 좋은 문자열로 변환
     past_queries_str = ", ".join(state.get("past_queries", []))
     
     result = chain.invoke({
@@ -195,7 +184,6 @@ def rewrite_query_node(state: AgentState):
     
     print(f"🔄 새 키워드 도출: '{result.improved_query}'\n💡 반성 및 변경 이유: {result.reasoning}")
     
-    # 🚀 원래 질문(question)은 놔두고, 검색어(search_query)만 업데이트합니다.
     return {"search_query": result.improved_query, "retry_count": state["retry_count"] + 1}
 
 # ==========================================
@@ -223,10 +211,7 @@ workflow.add_edge("generate", "evaluate")
 workflow.add_conditional_edges("evaluate", route_evaluation, {"end": END, "rewrite": "rewrite_query"})
 workflow.add_edge("rewrite_query", "retrieve")
 
-# 🚀 1. 메모리 저장소 인스턴스 생성
 memory = MemorySaver()
-
-# 🚀 2. 컴파일 할 때 checkpointer로 메모리를 넘겨줍니다! (이름을 graph_app으로 통일)
 graph_app = workflow.compile(checkpointer=memory)
 
 
@@ -237,7 +222,6 @@ app = FastAPI(title="LangGraph Meta-Cognition API", version="1.0")
 
 class ChatRequest(BaseModel):
     question: str = Field(..., example="올해 체력단련비 지원 한도가 얼마야?")
-    # 🚀 클라이언트가 스레드 ID를 주지 않으면 기본값으로 새 세션을 만듭니다.
     thread_id: str = "default-session"    
 
 class ChatResponse(BaseModel):
@@ -245,9 +229,6 @@ class ChatResponse(BaseModel):
     final_query: str
     retry_count: int
 
-# ==========================================
-# 5. FastAPI 서버 설정 및 API 엔드포인트
-# ==========================================
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
     try:
@@ -255,11 +236,10 @@ async def chat_endpoint(request: ChatRequest):
         
         config = {"configurable": {"thread_id": request.thread_id}}
         
-        # 🚀 수정: 최초 상태에 search_query를 질문과 동일하게 추가
         input_state = {
             "messages": [HumanMessage(content=request.question)],
             "question": request.question, 
-            "search_query": request.question, # 첫 검색은 질문 그대로 시도
+            "search_query": request.question, 
             "retry_count": 0
         }
         
@@ -269,7 +249,7 @@ async def chat_endpoint(request: ChatRequest):
         
         return ChatResponse(
             answer=final_answer,
-            final_query=result.get("search_query", request.question), # 최종 검색어로 응답
+            final_query=result.get("search_query", request.question),
             retry_count=result.get("retry_count", 0)
         )
     except Exception as e:

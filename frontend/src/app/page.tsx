@@ -9,6 +9,28 @@ import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
+// 타이핑 애니메이션 커스텀 훅
+export function useTypingAnimation(text: string, speed: number = 50) {
+  const [displayedText, setDisplayedText] = useState('');
+  
+  useEffect(() => {
+    let currentIndex = 0;
+    setDisplayedText(''); // 텍스트가 변경될 때마다 초기화
+
+    const intervalId = setInterval(() => {
+      setDisplayedText((prev) => prev + text[currentIndex]);
+      currentIndex++;
+      if (currentIndex >= text.length) {
+        clearInterval(intervalId);
+      }
+    }, speed);
+
+    return () => clearInterval(intervalId);
+  }, [text, speed]);
+
+  return displayedText;
+}
+
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -17,6 +39,50 @@ interface ChatMessage {
     retries: number;
   };
 }
+
+// 🚀 추가: AI 답변 전용 타이핑 + 마크다운 렌더링 컴포넌트
+const AnimatedMarkdown = ({ 
+  content, 
+  isLast 
+}: { 
+  content: string; 
+  isLast: boolean; 
+}) => {
+  // 마지막 메시지일 때만 타이핑 훅 사용 (속도는 20ms 정도로 약간 빠르게)
+  const animatedText = useTypingAnimation(content, 20);
+  
+  // 마지막 메시지면 타이핑 중인 텍스트를, 과거 메시지면 전체 텍스트를 바로 렌더링
+  const displayText = isLast ? animatedText : content;
+
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      className="prose prose-sm max-w-none prose-p:my-1 prose-pre:p-0 prose-pre:bg-transparent"
+      components={{
+        code({ node, inline, className, children, ...props }: any) {
+          const match = /language-(\w+)/.exec(className || '');
+          return !inline && match ? (
+            <SyntaxHighlighter
+              style={vscDarkPlus as any}
+              language={match[1]}
+              PreTag="div"
+              className="rounded-lg !my-2"
+              {...props}
+            >
+              {String(children).replace(/\n$/, '')}
+            </SyntaxHighlighter>
+          ) : (
+            <code className="bg-slate-100 text-red-500 px-1.5 py-0.5 rounded text-[13px]" {...props}>
+              {children}
+            </code>
+          );
+        }
+      }}
+    >
+      {displayText}
+    </ReactMarkdown>
+  );
+};
 
 export default function ChatPage() {
   const [question, setQuestion] = useState('');
@@ -124,60 +190,42 @@ const handleSubmit = async (e: React.FormEvent) => {
             </div>
           )}
           
-          {messages.map((msg, idx) => (
-            <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[85%] p-4 rounded-2xl shadow-sm ${
-                msg.role === 'user' 
-                  ? 'bg-blue-600 text-white rounded-tr-none' 
-                  : 'bg-white border border-slate-200 text-slate-800 rounded-tl-none'
-              }`}>
-                <div className="flex items-center gap-2 mb-2 opacity-70">
-                  {msg.role === 'user' ? <User size={14} /> : <Bot size={14} />}
-                  <span className="text-[10px] font-bold uppercase">{msg.role}</span>
-                </div>
-                
-                {/* 🚀 일반 텍스트 대신 ReactMarkdown 컴포넌트를 사용합니다 */}
-                <div className="text-sm leading-relaxed overflow-x-auto">
-                  {msg.role === 'user' ? (
-                    <p className="whitespace-pre-wrap">{msg.content}</p>
-                  ) : (
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      className="prose prose-sm max-w-none prose-p:my-1 prose-pre:p-0 prose-pre:bg-transparent"
-                      components={{
-                        code({ node, inline, className, children, ...props }: any) {
-                          const match = /language-(\w+)/.exec(className || '');
-                          return !inline && match ? (
-                            <SyntaxHighlighter
-                              style={vscDarkPlus as any}
-                              language={match[1]}
-                              PreTag="div"
-                              className="rounded-lg !my-2"
-                              {...props}
-                            >
-                              {String(children).replace(/\n$/, '')}
-                            </SyntaxHighlighter>
-                          ) : (
-                            <code className="bg-slate-100 text-red-500 px-1.5 py-0.5 rounded text-[13px]" {...props}>
-                              {children}
-                            </code>
-                          );
-                        }
-                      }}
-                    >
-                      {msg.content}
-                    </ReactMarkdown>
+          {messages.map((msg, idx) => {
+            // 🚀 추가: 현재 메시지가 배열의 제일 마지막 메시지인지 확인
+            const isLast = idx === messages.length - 1;
+
+            return (
+              <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[85%] p-4 rounded-2xl shadow-sm ${
+                  msg.role === 'user' 
+                    ? 'bg-blue-600 text-white rounded-tr-none' 
+                    : 'bg-white border border-slate-200 text-slate-800 rounded-tl-none'
+                }`}>
+                  <div className="flex items-center gap-2 mb-2 opacity-70">
+                    {msg.role === 'user' ? <User size={14} /> : <Bot size={14} />}
+                    <span className="text-[10px] font-bold uppercase">{msg.role}</span>
+                  </div>
+                  
+                  {/* 🚀 일반 텍스트 대신 ReactMarkdown 컴포넌트를 사용합니다 */}
+                  <div className="text-sm leading-relaxed overflow-x-auto">
+                    {msg.role === 'user' ? (
+                      <p className="whitespace-pre-wrap">{msg.content}</p>
+                    ) : (
+                      // 🚀 수정: 기존 ReactMarkdown을 AnimatedMarkdown으로 교체!
+                      <AnimatedMarkdown content={msg.content} isLast={isLast} />
+                    )}
+                  </div>
+                  
+                  {msg.metadata && (
+                    <div className="mt-3 pt-2 border-t border-slate-100 text-[10px] text-blue-500 font-mono">
+                      <span> 🔍 Query: {msg.metadata.query}</span>
+                      <span> 🔄 Retries: {msg.metadata.retries}</span>
+                    </div>
                   )}
                 </div>
-                
-                {msg.metadata && (
-                  <div className="mt-3 pt-2 border-t border-slate-100 text-[10px] text-blue-500 font-mono">
-                    🔍 Query: {msg.metadata.query} | 🔄 Retries: {msg.metadata.retries}
-                  </div>
-                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
 
           {/* AI가 생각 중일 때 보여줄 타이핑 인디케이터 */}
           {isSending && (

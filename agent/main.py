@@ -3,8 +3,8 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 
 # 🚀 dotenv 로드
-from dotenv import load_dotenv
-load_dotenv()
+# from dotenv import load_dotenv
+# load_dotenv()
 
 from typing import TypedDict, List, Annotated
 import operator

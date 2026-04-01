@@ -1,7 +1,21 @@
 version: '3.8'
 
 services:
-  # 1. 인메모리 메시지 브로커 (Spring Boot SSE 통신용)
+  # 1. 메시지 브로커 (Spring Boot <-> Python 통신용)
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672" # AMQP 포트
+      - "15672:15672" # 관리 UI 포트
+    restart: unless-stopped
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=kyle
+      - RABBITMQ_DEFAULT_PASS=password
+
+  # 2. 인메모리 캐시 (캐싱용)
   redis:
     image: redis:latest
     container_name: redis-streams
@@ -11,7 +25,7 @@ services:
     volumes:
       - redis-data:/data
 
-  # 2. 지식 그래프 데이터베이스 (Graph RAG용)
+  # 3. 지식 그래프 데이터베이스 (Graph RAG용)
   neo4j:
     image: neo4j:latest
     container_name: neo4j-graph
@@ -25,9 +39,8 @@ services:
       - neo4j-data:/data
 
   # -------------------------------------------------
-  # 👇 3. 당분간 파이썬은 로컬에서 직접 돌릴 것이므로 주석 처리합니다!
+  # 👇 4. 당분간 파이썬은 로컬에서 직접 돌릴 것이므로 주석 처리합니다!
   # -------------------------------------------------
-  # 3. LangGraph 기반 메타인지 AI 에이전트
   # ai-agent:
   #   build: .  # 현재 폴더의 Dockerfile을 사용해 이미지를 빌드합니다.
   #   container_name: ai-agent-api
@@ -42,9 +55,11 @@ services:
   #   depends_on:
   #     - redis
   #     - neo4j
+  #     - rabbitmq
   #   restart: unless-stopped
 
 # 컨테이너가 삭제되어도 데이터가 날아가지 않도록 볼륨(저장소)을 매핑합니다.
 volumes:
+  rabbitmq-data:
   redis-data:
   neo4j-data:

@@ -5,6 +5,13 @@ spring:
   application:
     name: sse-agent-backend
 
+  # 🐰 RabbitMQ 설정
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: kyle
+    password: password
+
   # 🚀 [핵심] 톰캣이 OS 스레드 대신 Java 21 가상 스레드를 사용하도록 설정
   threads:
     virtual:
@@ -16,7 +23,11 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 
-# 🧠 Python AI 에이전트 통신 주소
+# 🧠 Python AI 에이전트 통신 주소 (이제 RabbitMQ를 쓰면 점진적으로 안 쓰게 될 주소입니다!)
 ai:
   agent:
     url: ${AI_AGENT_URL:http://localhost:8000/api/chat}
+
+app:
+  broker:
+    type: rabbitmq # 여기서 'rabbitmq' 또는 'redis' 로 자유롭게 전환!

@@ -43,15 +43,17 @@ def retrieve_node(state: AgentState):
     current_query = state.get("search_query") or state["question"]
     print(f"\n[DB 검색] 검색어: '{current_query}' (원래 질문: '{state['question']}')")
 
-    keywords = current_query.split()
+    # Full-Text 검색을 위해 검색어들을 논리합(OR) 형태로 가공 (예: "복지 포인트" -> "복지 OR 포인트")
+    keywords_str = " OR ".join(current_query.split())
 
+    # 🚀 최적화된 Cypher 쿼리: Full-Text 인덱스 활용 및 가중치 정렬 (Score 기반)
     cypher_query = """
-    MATCH (n)
-    WHERE any(keyword IN $keywords WHERE n.name CONTAINS keyword OR n.title CONTAINS keyword OR n.content CONTAINS keyword)
-    OPTIONAL MATCH (n)-[r]-(m)
-    WITH n, r, m
+    CALL db.index.fulltext.queryNodes("search_index", $keywords) YIELD node, score
+    OPTIONAL MATCH (node)-[r]-(m)
+    WITH node, score, r, m
+    ORDER BY score DESC
     RETURN 
-      "[" + coalesce(n.name, n.title, '이름없음') + "] " + coalesce(n.content, n.description, '') + 
+      "[" + coalesce(node.name, node.title, '이름없음') + "] " + coalesce(node.content, node.description, '') + 
       CASE WHEN m IS NOT NULL THEN 
         " ➡️ (추가 관련 정보: " + coalesce(m.name, m.title, '') + " - " + coalesce(m.content, m.description, '') + ")"
       ELSE "" END AS context
@@ -61,16 +63,17 @@ def retrieve_node(state: AgentState):
     documents = []
     try:
         with neo4j_driver.session() as session:
-            result = session.run(cypher_query, keywords=keywords)
+            # 리스트 대신 가공된 문자열(keywords_str)을 파라미터로 넘깁니다.
+            result = session.run(cypher_query, keywords=keywords_str)
             documents = [record["context"] for record in result if record["context"]]
     except Exception as e:
-        print(f"DB 검색 중 에러: {e}")
+        print(f"❌ DB 검색 중 에러: {e}")
 
     if not documents:
         print("⚠️ 관련 문서가 검색되지 않았습니다.")
         documents = ["관련 문서가 검색되지 않았습니다. 질문을 더 구체적으로 수정해보세요."]
     else:
-        print(f"✅ {len(documents)}개의 그래프 문맥(Context) 검색 완료.")
+        print(f"✅ {len(documents)}개의 최적화된 문맥(Context) 검색 완료.")
 
     return {
         "search_query": current_query,

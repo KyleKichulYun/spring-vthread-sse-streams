@@ -33,3 +33,9 @@ llm = ChatOpenAI(model="gpt-4o", temperature=0)
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
 RABBITMQ_USER = os.getenv("RABBITMQ_USER", "kyle")
 RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "password")
+
+def close_db():
+    """애플리케이션 종료 시 Neo4j 커넥션을 안전하게 닫습니다."""
+    if neo4j_driver is not None:
+        neo4j_driver.close()
+        print("🛑 [Config] Neo4j 커넥션이 안전하게 종료되었습니다.")

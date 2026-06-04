@@ -104,8 +104,12 @@ async def main():
         print(f"❌ [에러 발생] RabbitMQ 연결 또는 실행 중 오류: {e}")
 
 if __name__ == '__main__':
+    from config import close_db  # 추가된 함수 임포트
     try:
         # 비동기 이벤트 루프 실행
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n🛑 워커를 안전하게 종료합니다.")
+    finally:
+        # 💡 [핵심] 정상 종료든 에러 종료든 무조건 DB 커넥션을 닫고 나갑니다.
+        close_db()

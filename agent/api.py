@@ -1,12 +1,23 @@
 import uvicorn
+from contextlib import asynccontextmanager  # 💡 1. 누락된 임포트 추가
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage
 
 # 🚀 분리한 모듈 임포트
 from agent import graph_app
+from config import close_db
 
-app = FastAPI(title="LangGraph Meta-Cognition API", version="1.0")
+# 💡 [핵심] FastAPI 시작과 종료 시점을 제어하는 로직
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 시작 시점 (yield 이전) - 현재는 config.py에서 자동 연결되므로 비워둠
+    yield
+    # 종료 시점 (yield 이후) - 서버가 꺼질 때 실행
+    close_db()
+
+# 💡 2. FastAPI 객체 생성 시 lifespan 파라미터 연결
+app = FastAPI(title="LangGraph Meta-Cognition API", version="1.0", lifespan=lifespan)
 
 class ChatRequest(BaseModel):
     question: str = Field(..., example="올해 체력단련비 지원 한도가 얼마야?")

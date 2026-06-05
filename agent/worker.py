@@ -4,7 +4,7 @@ import aio_pika
 from langchain_core.messages import HumanMessage
 
 # 🚀 분리한 모듈 임포트
-from config import RABBITMQ_HOST, RABBITMQ_USER, RABBITMQ_PASS
+from config import RABBITMQ_HOST, RABBITMQ_USER, RABBITMQ_PASS, close_db, logger
 from agent import graph_app
 
 async def process_question(message: aio_pika.abc.AbstractIncomingMessage):
@@ -18,10 +18,7 @@ async def process_question(message: aio_pika.abc.AbstractIncomingMessage):
         thread_id = data.get("threadId", "default-session")
         question = data.get("question", "")
 
-        print(f"\n==================================================")
-        print(f"📩 [작업 수신] Thread: {thread_id}")
-        print(f"❓ [질문 내용] {question}")
-        print(f"==================================================")
+        logger.info(f"📩 [작업 수신] Thread: {thread_id} | ❓ [질문 내용] {question}")
 
         try:
             config = {"configurable": {"thread_id": thread_id}}
@@ -54,19 +51,27 @@ async def process_question(message: aio_pika.abc.AbstractIncomingMessage):
                 aio_pika.Message(body=json.dumps(response_data, ensure_ascii=False).encode('utf-8')),
                 routing_key='answer.queue'
             )
-            print(f"\n📤 [답변 발송 완료] Spring Boot로 전송했습니다. (Thread: {thread_id})")
+            logger.info(f"📤 [답변 발송 완료] Spring Boot로 전송했습니다. (Thread: {thread_id})")
+        except asyncio.TimeoutError:
+            logger.error(f"⏳ [에러] AI 처리 시간 초과 (Timeout). Thread: {thread_id}")
+            await _send_error_response(message, thread_id)
 
         except Exception as e:
-            print(f"\n❌ [에러 발생] AI 처리 중 오류: {str(e)}")
-            error_data = {
-                "threadId": thread_id,
-                "answer": "죄송합니다. 시스템 오류로 인해 답변을 생성하지 못했습니다.",
-                "isDone": True
-            }
-            await message.channel.default_exchange.publish(
-                aio_pika.Message(body=json.dumps(error_data, ensure_ascii=False).encode('utf-8')),
-                routing_key='answer.queue'
-            )
+            # 💡 logger.exception을 사용하면 에러 발생 스택 트레이스(Traceback)가 자동으로 출력됩니다.
+            logger.exception(f"❌ [에러] AI 처리 중 예기치 못한 오류 발생. Thread: {thread_id}")
+            await _send_error_response(message, thread_id)
+
+async def _send_error_response(message: aio_pika.abc.AbstractIncomingMessage, thread_id: str):
+    """에러 발생 시 프론트엔드 연결 종료를 위한 공통 에러 메시지 발송 헬퍼 함수"""
+    error_data = {
+        "threadId": thread_id,
+        "answer": "죄송합니다. 시스템 오류로 인해 답변을 생성하지 못했습니다.",
+        "isDone": True
+    }
+    await message.channel.default_exchange.publish(
+        aio_pika.Message(body=json.dumps(error_data, ensure_ascii=False).encode('utf-8')),
+        routing_key='answer.queue'
+    )
 
 
 async def main():
@@ -89,10 +94,8 @@ async def main():
             queue = await channel.declare_queue('question.queue', durable=True)
             await channel.declare_queue('answer.queue', durable=True)
 
-            print("\n==================================================")
-            print("⚡ [*] 파이썬 '비동기(Async)' 메타인지 AI 워커 가동 완료!")
-            print("🎧 'question.queue' 대기 중... (종료하려면 CTRL+C)")
-            print("==================================================\n")
+            logger.info("⚡ [*] 파이썬 '비동기(Async)' 메타인지 AI 워커 가동 완료!")
+            logger.info("🎧 'question.queue' 대기 중... (종료하려면 CTRL+C)")
 
             # 메시지 소비 시작
             await queue.consume(process_question)
@@ -100,11 +103,12 @@ async def main():
             # 워커가 종료되지 않고 계속 백그라운드에서 돌도록 무한 대기
             await asyncio.Future()
 
+    except aio_pika.exceptions.AMQPConnectionError:
+        logger.error("❌ [연결 실패] RabbitMQ 서버에 연결할 수 없습니다. 인프라 설정을 확인하세요.")
     except Exception as e:
-        print(f"❌ [에러 발생] RabbitMQ 연결 또는 실행 중 오류: {e}")
+        logger.exception("❌ [에러 발생] RabbitMQ 워커 메인 루프 실행 중 오류:")
 
 if __name__ == '__main__':
-    from config import close_db  # 추가된 함수 임포트
     try:
         # 비동기 이벤트 루프 실행
         asyncio.run(main())

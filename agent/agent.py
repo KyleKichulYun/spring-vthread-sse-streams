@@ -10,7 +10,7 @@ from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
 
 # 🚀 config.py에서 공통 자원 임포트
-from config import neo4j_driver, llm
+from config import neo4j_driver, llm, logger
 
 # ==========================================
 # 1. 상태(State) 정의
@@ -41,7 +41,7 @@ class RewriteOutput(BaseModel):
 # ==========================================
 def retrieve_node(state: AgentState):
     current_query = state.get("search_query") or state["question"]
-    print(f"\n[DB 검색] 검색어: '{current_query}' (원래 질문: '{state['question']}')")
+    logger.info(f"[DB 검색] 검색어: '{current_query}' (원래 질문: '{state['question']}')")
 
     # Full-Text 검색을 위해 검색어들을 논리합(OR) 형태로 가공 (예: "복지 포인트" -> "복지 OR 포인트")
     keywords_str = " OR ".join(current_query.split())
@@ -67,13 +67,13 @@ def retrieve_node(state: AgentState):
             result = session.run(cypher_query, keywords=keywords_str)
             documents = [record["context"] for record in result if record["context"]]
     except Exception as e:
-        print(f"❌ DB 검색 중 에러: {e}")
+        logger.exception("❌ [DB 검색] Neo4j Cypher 쿼리 실행 중 에러 발생: {e}")
 
     if not documents:
-        print("⚠️ 관련 문서가 검색되지 않았습니다.")
+        logger.warning("⚠️ 관련 문서가 검색되지 않았습니다.")
         documents = ["관련 문서가 검색되지 않았습니다. 질문을 더 구체적으로 수정해보세요."]
     else:
-        print(f"✅ {len(documents)}개의 최적화된 문맥(Context) 검색 완료.")
+        logger.info(f"✅ [DB 검색] {len(documents)}개의 최적화된 문맥(Context) 검색 완료.")
 
     return {
         "search_query": current_query,
@@ -83,7 +83,7 @@ def retrieve_node(state: AgentState):
     }
 
 def generate_node(state: AgentState):
-    print("\n[생성] 답변 초안 작성 중...")
+    logger.info("[생성] 답변 초안 작성 중...")
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", "당신은 제공된 문서(Context)와 이전 대화 기록을 바탕으로 사용자의 질문에 답하는 유능한 어시스턴트입니다.\n\n문서: {context}"),
@@ -94,12 +94,12 @@ def generate_node(state: AgentState):
     context_str = "\n".join(state["documents"])
 
     generation = chain.invoke({"context": context_str, "messages": state["messages"]})
-    print(f"💡 답변 초안: {generation}")
+    logger.debug(f"💡 답변 초안: {generation}") # 초안 내용은 길 수 있으므로 debug 레벨로 설정
 
     return {"generation": generation, "messages": [AIMessage(content=generation)]}
 
 def evaluate_node(state: AgentState):
-    print("\n[평가] 환각 여부 및 질문 해결 완벽성 검증 중...")
+    logger.info("[평가] 환각 여부 및 질문 해결 완벽성 검증 중...")
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", """당신은 깐깐한 AI 품질 검증관(QA)입니다.
@@ -125,12 +125,16 @@ def evaluate_node(state: AgentState):
     })
 
     feedback_str = f"{result.score}: {result.reason}"
-    print(f"⚖️ 평가 결과: {feedback_str}")
+
+    if "Pass" in result.score:
+        logger.info(f"⚖️ [평가 결과] 통과! ({result.reason})")
+    else:
+        logger.warning(f"⚠️ [평가 결과] 실패! ({result.reason})")
 
     return {"feedback": feedback_str}
 
 def rewrite_query_node(state: AgentState):
-    print("\n[재작성] 평가 실패. 메타인지 분석 및 검색어 수정 중...")
+    logger.info("[재작성] 평가 실패. 메타인지 분석 및 검색어 수정 중...")
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", """당신은 AI 에이전트의 검색 성능을 극대화하는 '전문 검색 전략가'입니다.
@@ -154,7 +158,7 @@ def rewrite_query_node(state: AgentState):
         "feedback": state["feedback"]
     })
 
-    print(f"🔄 새 키워드 도출: '{result.improved_query}'\n💡 반성 및 변경 이유: {result.reasoning}")
+    logger.info(f"🔄 새 키워드 도출: '{result.improved_query}'\n💡 반성 및 변경 이유: {result.reasoning}")
 
     return {"search_query": result.improved_query, "retry_count": state["retry_count"] + 1}
 
@@ -163,10 +167,10 @@ def rewrite_query_node(state: AgentState):
 # ==========================================
 def route_evaluation(state: AgentState):
     if "Pass" in state["feedback"]:
-        print("\n✅ [완료] 검증 통과! 최종 답변을 전송합니다.")
+        logger.info("✅ [완료] 검증 통과! 최종 답변을 전송합니다.")
         return "end"
     elif state["retry_count"] >= 2:
-        print("\n❌ [중단] 최대 재시도 횟수 초과. 환각을 방지하기 위해 답변을 포기합니다.")
+        logger.error("❌ [중단] 최대 재시도 횟수 초과. 환각을 방지하기 위해 답변을 포기합니다.")
         return "end"
     else:
         return "rewrite"

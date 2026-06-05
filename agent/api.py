@@ -6,7 +6,7 @@ from langchain_core.messages import HumanMessage
 
 # 🚀 분리한 모듈 임포트
 from agent import graph_app
-from config import close_db
+from config import close_db, logger
 
 # 💡 [핵심] FastAPI 시작과 종료 시점을 제어하는 로직
 @asynccontextmanager
@@ -31,7 +31,7 @@ class ChatResponse(BaseModel):
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
     try:
-        print(f"\n🚀 [API 요청 수신] 질문: {request.question} (Thread: {request.thread_id})")
+        logger.info(f"🚀 [API 요청 수신] 질문: {request.question} (Thread: {request.thread_id})")
 
         config = {"configurable": {"thread_id": request.thread_id}}
 
@@ -53,11 +53,11 @@ async def chat_endpoint(request: ChatRequest):
             retry_count=result.get("retry_count", 0)
         )
     except Exception as e:
-        print(f"❌ [에러 발생] {str(e)}")
+        logger.exception(f"❌ [에러 발생] API 처리 중 예기치 못한 오류 발생: {str(e)}")
         raise HTTPException(status_code=500, detail="AI 에이전트 처리 중 오류가 발생했습니다.")
 
 if __name__ == "__main__":
-    print("==================================================")
-    print("🌐 FastAPI 서버를 시작합니다...")
-    print("==================================================")
+    logger.info("==================================================")
+    logger.info("🌐 FastAPI 서버를 시작합니다...")
+    logger.info("==================================================")
     uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)

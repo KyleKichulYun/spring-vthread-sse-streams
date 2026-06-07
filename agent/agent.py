@@ -1,16 +1,16 @@
-from typing import TypedDict, List, Annotated
 import operator
-from pydantic import BaseModel, Field
-
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.messages import BaseMessage, AIMessage
-from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
-from langgraph.checkpoint.memory import MemorySaver
+from typing import Annotated, TypedDict
 
 # 🚀 config.py에서 공통 자원 임포트
-from config import neo4j_driver, llm, logger
+from config import llm, logger, neo4j_driver
+from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
+from langgraph.graph.message import add_messages
+from pydantic import BaseModel, Field
+
 
 # ==========================================
 # 1. 상태(State) 정의
@@ -20,10 +20,11 @@ class AgentState(TypedDict):
     question: str
     search_query: str
     past_queries: Annotated[list[str], operator.add]
-    documents: List[str]
+    documents: list[str]
     generation: str
     feedback: str
     retry_count: int
+
 
 # ==========================================
 # 2. 구조화된 출력 모델 (Pydantic)
@@ -32,9 +33,11 @@ class GradeOutput(BaseModel):
     score: str = Field(description="평가 결과. 'Pass' 또는 'Fail'만 입력")
     reason: str = Field(description="왜 이런 평가를 내렸는지 논리적인 이유 1~2문장")
 
+
 class RewriteOutput(BaseModel):
     improved_query: str = Field(description="원래 질문을 더 구체적이고 명확하게 개선한 검색어")
     reasoning: str = Field(description="왜 이렇게 검색어를 개선했는지 간단한 설명")
+
 
 # ==========================================
 # 3. 노드(Node) 구현
@@ -66,7 +69,7 @@ def retrieve_node(state: AgentState):
             # 리스트 대신 가공된 문자열(keywords_str)을 파라미터로 넘깁니다.
             result = session.run(cypher_query, keywords=keywords_str)
             documents = [record["context"] for record in result if record["context"]]
-    except Exception as e:
+    except Exception:
         logger.exception("❌ [DB 검색] Neo4j Cypher 쿼리 실행 중 에러 발생: {e}")
 
     if not documents:
@@ -79,38 +82,57 @@ def retrieve_node(state: AgentState):
         "search_query": current_query,
         "documents": documents,
         "past_queries": [current_query],
-        "retry_count": state.get("retry_count", 0)
+        "retry_count": state.get("retry_count", 0),
     }
+
 
 def generate_node(state: AgentState):
     logger.info("[생성] 답변 초안 작성 중...")
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "당신은 제공된 문서(Context)와 이전 대화 기록을 바탕으로 사용자의 질문에 답하는 유능한 어시스턴트입니다.\n\n문서: {context}"),
-        ("placeholder", "{messages}")
+        (
+            "system",
+            (
+                "당신은 제공된 문서(Context)와 이전 대화 기록을 바탕으로 "
+                "사용자의 질문에 답하는 유능한 어시스턴트입니다.\n\n"
+                "문서: {context}"
+            ),
+        ),
+        ("placeholder", "{messages}"),
     ])
 
     chain = prompt | llm | StrOutputParser()
     context_str = "\n".join(state["documents"])
 
     generation = chain.invoke({"context": context_str, "messages": state["messages"]})
-    logger.debug(f"💡 답변 초안: {generation}") # 초안 내용은 길 수 있으므로 debug 레벨로 설정
+    logger.debug(f"💡 답변 초안: {generation}")  # 초안 내용은 길 수 있으므로 debug 레벨로 설정
 
     return {"generation": generation, "messages": [AIMessage(content=generation)]}
+
 
 def evaluate_node(state: AgentState):
     logger.info("[평가] 환각 여부 및 질문 해결 완벽성 검증 중...")
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", """당신은 깐깐한 AI 품질 검증관(QA)입니다.
-        생성된 답변이 다음 두 가지 기준을 모두 완벽히 통과하는지 엄격하게 평가하세요.
-
-        [평가 기준]
-        1. 사실성(Factuality): '생성된 답변'이 오직 '제공된 문서'에만 기반했는가? (문서에 없는 내용을 조금이라도 지어냈다면 무조건 Fail)
-        2. 관련성(Relevance): '생성된 답변'이 사용자의 '원래 질문'에 대한 답을 명확하고 완벽하게 제공했는가? (동문서답이거나 정보가 부족하면 Fail)
-
-        위 두 기준을 모두 만족해야만 'Pass'를 부여하고, 하나라도 부족하면 'Fail'을 부여하세요."""),
-        ("user", "원래 질문: {question}\n\n제공된 문서: {context}\n\n생성된 답변: {generation}")
+        (
+            "system",
+            (
+                "당신은 깐깐한 AI 품질 검증관(QA)입니다. "
+                "생성된 답변이 다음 두 가지 기준을 모두 완벽히 통과하는지 엄격하게 평가하세요.\n\n"
+                "[평가 기준]\n"
+                "1. 사실성(Factuality): '생성된 답변'이 오직 '제공된 문서'에만 기반했는가? "
+                "(문서에 없는 내용을 조금이라도 지어냈다면 무조건 Fail)\n"
+                "2. 관련성(Relevance): '생성된 답변'이 사용자의 '원래 질문'에 대한 답을 "
+                "명확하고 완벽하게 제공했는가? (동문서답이거나 정보가 부족하면 Fail)\n\n"
+                "위 두 기준을 모두 만족해야만 'Pass'를 부여하고, 하나라도 부족하면 'Fail'을 부여하세요."
+            ),
+        ),
+        (
+            "user",
+            "원래 질문: {question}\n\n"
+            "제공된 문서: {context}\n\n"
+            "생성된 답변: {generation}",
+        ),
     ])
 
     structured_llm = llm.with_structured_output(GradeOutput)
@@ -118,11 +140,7 @@ def evaluate_node(state: AgentState):
 
     context_str = "\n".join(state["documents"])
 
-    result = chain.invoke({
-        "question": state["question"],
-        "context": context_str,
-        "generation": state["generation"]
-    })
+    result = chain.invoke({"question": state["question"], "context": context_str, "generation": state["generation"]})
 
     feedback_str = f"{result.score}: {result.reason}"
 
@@ -133,18 +151,29 @@ def evaluate_node(state: AgentState):
 
     return {"feedback": feedback_str}
 
+
 def rewrite_query_node(state: AgentState):
     logger.info("[재작성] 평가 실패. 메타인지 분석 및 검색어 수정 중...")
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", """당신은 AI 에이전트의 검색 성능을 극대화하는 '전문 검색 전략가'입니다.
-        사용자의 원래 질문에 답하기 위해 DB를 검색했지만 실패했습니다.
-        
-        [반드시 지켜야 할 규칙]
-        1. 이전 평가 피드백을 분석하여 무엇이 부족했는지 파악하세요.
-        2. '시도했던 검색어'와 겹치지 않는 완전히 새로운 유의어나 더 포괄적인 단어를 선택하세요.
-        3. 문장 형태가 아닌, **띄어쓰기로만 구분된 2~3개의 핵심 명사 키워드**만 출력하세요. (예: "복지포인트 규정 금액")"""),
-        ("user", "원래 질문: {question}\n시도했던 검색어들: {past_queries}\n이전 평가 피드백: {feedback}")
+        (
+            "system",
+            (
+                "당신은 AI 에이전트의 검색 성능을 극대화하는 '전문 검색 전략가'입니다. "
+                "사용자의 원래 질문에 답하기 위해 DB를 검색했지만 실패했습니다.\n\n"
+                "[반드시 지켜야 할 규칙]\n"
+                "1. 이전 평가 피드백을 분석하여 무엇이 부족했는지 파악하세요.\n"
+                "2. '시도했던 검색어'와 겹치지 않는 완전히 새로운 유의어나 더 포괄적인 단어를 선택하세요.\n"
+                "3. 문장 형태가 아닌, **띄어쓰기로만 구분된 2~3개의 핵심 명사 키워드**만 출력하세요. "
+                '(예: "복지포인트 규정 금액")'
+            ),
+        ),
+        (
+            "user",
+            "원래 질문: {question}\n"
+            "시도했던 검색어들: {past_queries}\n"
+            "이전 평가 피드백: {feedback}",
+        ),
     ])
 
     structured_llm = llm.with_structured_output(RewriteOutput)
@@ -152,15 +181,14 @@ def rewrite_query_node(state: AgentState):
 
     past_queries_str = ", ".join(state.get("past_queries", []))
 
-    result = chain.invoke({
-        "question": state['question'],
-        "past_queries": past_queries_str,
-        "feedback": state["feedback"]
-    })
+    result = chain.invoke(
+        {"question": state["question"], "past_queries": past_queries_str, "feedback": state["feedback"]}
+    )
 
     logger.info(f"🔄 새 키워드 도출: '{result.improved_query}'\n💡 반성 및 변경 이유: {result.reasoning}")
 
     return {"search_query": result.improved_query, "retry_count": state["retry_count"] + 1}
+
 
 # ==========================================
 # 4. 라우팅 및 그래프 조립
@@ -174,6 +202,7 @@ def route_evaluation(state: AgentState):
         return "end"
     else:
         return "rewrite"
+
 
 workflow = StateGraph(AgentState)
 workflow.add_node("retrieve", retrieve_node)

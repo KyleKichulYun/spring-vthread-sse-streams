@@ -1,11 +1,14 @@
-import json
 import asyncio
+import json
+
 import aio_pika
-from langchain_core.messages import HumanMessage
 
 # 🚀 분리한 모듈 임포트
-from config import RABBITMQ_HOST, RABBITMQ_USER, RABBITMQ_PASS, close_db, logger
+from config import RABBITMQ_HOST, RABBITMQ_PASS, RABBITMQ_USER, close_db, logger
+from langchain_core.messages import HumanMessage
+
 from agent import graph_app
+
 
 async def process_question(message: aio_pika.abc.AbstractIncomingMessage):
     """
@@ -13,7 +16,7 @@ async def process_question(message: aio_pika.abc.AbstractIncomingMessage):
     """
     # async with 블록을 사용하면 처리가 무사히 끝났을 때 자동으로 ACK를 전송합니다.
     async with message.process():
-        body = message.body.decode('utf-8')
+        body = message.body.decode("utf-8")
         data = json.loads(body)
         thread_id = data.get("threadId", "default-session")
         question = data.get("question", "")
@@ -26,7 +29,7 @@ async def process_question(message: aio_pika.abc.AbstractIncomingMessage):
                 "messages": [HumanMessage(content=question)],
                 "question": question,
                 "search_query": question,
-                "retry_count": 0
+                "retry_count": 0,
             }
 
             # 💡 [핵심] ainvoke를 사용하여 AI 처리를 비동기로 대기합니다!
@@ -40,37 +43,34 @@ async def process_question(message: aio_pika.abc.AbstractIncomingMessage):
                 "threadId": thread_id,
                 "answer": final_answer,
                 "isDone": True,
-                "metadata": {
-                    "query": final_query,
-                    "retries": retry_count
-                }
+                "metadata": {"query": final_query, "retries": retry_count},
             }
 
             # 💡 [핵심] 메시지 발행(Publish)도 비동기로 처리합니다.
             await message.channel.default_exchange.publish(
-                aio_pika.Message(body=json.dumps(response_data, ensure_ascii=False).encode('utf-8')),
-                routing_key='answer.queue'
+                aio_pika.Message(body=json.dumps(response_data, ensure_ascii=False).encode("utf-8")),
+                routing_key="answer.queue",
             )
             logger.info(f"📤 [답변 발송 완료] Spring Boot로 전송했습니다. (Thread: {thread_id})")
         except asyncio.TimeoutError:
             logger.error(f"⏳ [에러] AI 처리 시간 초과 (Timeout). Thread: {thread_id}")
             await _send_error_response(message, thread_id)
 
-        except Exception as e:
+        except Exception:
             # 💡 logger.exception을 사용하면 에러 발생 스택 트레이스(Traceback)가 자동으로 출력됩니다.
             logger.exception(f"❌ [에러] AI 처리 중 예기치 못한 오류 발생. Thread: {thread_id}")
             await _send_error_response(message, thread_id)
+
 
 async def _send_error_response(message: aio_pika.abc.AbstractIncomingMessage, thread_id: str):
     """에러 발생 시 프론트엔드 연결 종료를 위한 공통 에러 메시지 발송 헬퍼 함수"""
     error_data = {
         "threadId": thread_id,
         "answer": "죄송합니다. 시스템 오류로 인해 답변을 생성하지 못했습니다.",
-        "isDone": True
+        "isDone": True,
     }
     await message.channel.default_exchange.publish(
-        aio_pika.Message(body=json.dumps(error_data, ensure_ascii=False).encode('utf-8')),
-        routing_key='answer.queue'
+        aio_pika.Message(body=json.dumps(error_data, ensure_ascii=False).encode("utf-8")), routing_key="answer.queue"
     )
 
 
@@ -91,8 +91,8 @@ async def main():
             await channel.set_qos(prefetch_count=5)
 
             # 큐 선언 (durable=True로 설정하여 메시지 유실 방지)
-            queue = await channel.declare_queue('question.queue', durable=True)
-            await channel.declare_queue('answer.queue', durable=True)
+            queue = await channel.declare_queue("question.queue", durable=True)
+            await channel.declare_queue("answer.queue", durable=True)
 
             logger.info("⚡ [*] 파이썬 '비동기(Async)' 메타인지 AI 워커 가동 완료!")
             logger.info("🎧 'question.queue' 대기 중... (종료하려면 CTRL+C)")
@@ -105,10 +105,11 @@ async def main():
 
     except aio_pika.exceptions.AMQPConnectionError:
         logger.error("❌ [연결 실패] RabbitMQ 서버에 연결할 수 없습니다. 인프라 설정을 확인하세요.")
-    except Exception as e:
+    except Exception:
         logger.exception("❌ [에러 발생] RabbitMQ 워커 메인 루프 실행 중 오류:")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     try:
         # 비동기 이벤트 루프 실행
         asyncio.run(main())

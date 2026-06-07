@@ -1,8 +1,10 @@
+import logging
 import os
 import warnings
-import logging
-from neo4j import GraphDatabase, exceptions as neo4j_exceptions
+
 from langchain_openai import ChatOpenAI
+from neo4j import GraphDatabase
+from neo4j import exceptions as neo4j_exceptions
 
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 
@@ -49,6 +51,7 @@ llm = ChatOpenAI(model="gpt-4o", temperature=0)
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
 RABBITMQ_USER = os.getenv("RABBITMQ_USER", "kyle")
 RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "password")
+
 
 def close_db():
     """애플리케이션 종료 시 Neo4j 커넥션을 안전하게 닫습니다."""

@@ -1,32 +1,32 @@
-import os
 import json
-import pika
+import operator
+import os
 import warnings
+from typing import Annotated, TypedDict
+
+import pika
+
+# --- FastAPI 관련 패키지 ---
+from fastapi import FastAPI, HTTPException
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+
+# --- LangChain & LangGraph ---
+from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
+from langgraph.graph.message import add_messages
+
+# --- Neo4j ---
+from neo4j import GraphDatabase
+from pydantic import BaseModel, Field
+
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 
 # 🚀 dotenv 로드
 # from dotenv import load_dotenv
 # load_dotenv()
-
-from typing import TypedDict, List, Annotated
-import operator
-from pydantic import BaseModel, Field
-
-# --- FastAPI 관련 패키지 ---
-from fastapi import FastAPI, HTTPException
-import uvicorn
-
-# --- LangChain & LangGraph ---
-from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
-from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
-from langgraph.checkpoint.memory import MemorySaver
-
-# --- Neo4j ---
-from neo4j import GraphDatabase
 
 # ==========================================
 # 0. 초기 셋업 (DB & LLM)
@@ -43,6 +43,7 @@ except Exception as e:
 
 llm = ChatOpenAI(model="gpt-4o", temperature=0)
 
+
 # ==========================================
 # 1. 상태(State) 정의
 # ==========================================
@@ -51,10 +52,11 @@ class AgentState(TypedDict):
     question: str
     search_query: str
     past_queries: Annotated[list[str], operator.add]
-    documents: List[str]
+    documents: list[str]
     generation: str
     feedback: str
     retry_count: int
+
 
 # ==========================================
 # 2. 구조화된 출력 모델 (Pydantic)
@@ -63,9 +65,11 @@ class GradeOutput(BaseModel):
     score: str = Field(description="평가 결과. 'Pass' 또는 'Fail'만 입력")
     reason: str = Field(description="왜 이런 평가를 내렸는지 논리적인 이유 1~2문장")
 
+
 class RewriteOutput(BaseModel):
     improved_query: str = Field(description="원래 질문을 더 구체적이고 명확하게 개선한 검색어")
     reasoning: str = Field(description="왜 이렇게 검색어를 개선했는지 간단한 설명")
+
 
 # ==========================================
 # 3. 노드(Node) 구현
@@ -77,19 +81,23 @@ def retrieve_node(state: AgentState):
     keywords = current_query.split()
 
     # 🚀 어제(KYL-56) 완성한 가장 완벽한 Graph RAG Cypher 쿼리!
-    cypher_query = """
-    MATCH (n)
-    WHERE any(keyword IN $keywords WHERE n.name CONTAINS keyword OR n.title CONTAINS keyword OR n.content CONTAINS keyword)
-    OPTIONAL MATCH (n)-[r]-(m)
-    WITH n, r, m
-    RETURN 
-      "[" + coalesce(n.name, n.title, '이름없음') + "] " + coalesce(n.content, n.description, '') + 
-      CASE WHEN m IS NOT NULL THEN 
-        " ➡️ (추가 관련 정보: " + coalesce(m.name, m.title, '') + " - " + coalesce(m.content, m.description, '') + ")"
-      ELSE "" END AS context
-    LIMIT 10
-    """
-
+    cypher_query = (
+        "MATCH (n) "
+        "WHERE any(keyword IN $keywords WHERE "
+        "n.name CONTAINS keyword OR "
+        "n.title CONTAINS keyword OR "
+        "n.content CONTAINS keyword) "
+        "OPTIONAL MATCH (n)-[r]-(m) "
+        "WITH n, r, m "
+        "RETURN "
+        "  '[' + coalesce(n.name, n.title, '이름없음') + '] ' + "
+        "  coalesce(n.content, n.description, '') + "
+        "  CASE WHEN m IS NOT NULL THEN "
+        "    ' ➡️ (추가 관련 정보: ' + coalesce(m.name, m.title, '') + ' - ' + "
+        "    coalesce(m.content, m.description, '') + ')' "
+        "  ELSE '' END AS context "
+        "LIMIT 10"
+    )
     documents = []
     try:
         with neo4j_driver.session() as session:
@@ -108,15 +116,23 @@ def retrieve_node(state: AgentState):
         "search_query": current_query,
         "documents": documents,
         "past_queries": [current_query],
-        "retry_count": state.get("retry_count", 0)
+        "retry_count": state.get("retry_count", 0),
     }
+
 
 def generate_node(state: AgentState):
     print("\n[생성] 답변 초안 작성 중...")
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "당신은 제공된 문서(Context)와 이전 대화 기록을 바탕으로 사용자의 질문에 답하는 유능한 어시스턴트입니다.\n\n문서: {context}"),
-        ("placeholder", "{messages}")
+        (
+            "system",
+            (
+                "당신은 제공된 문서(Context)와 이전 대화 기록을 바탕으로 "
+                "사용자의 질문에 답하는 유능한 어시스턴트입니다.\n\n"
+                "문서: {context}"
+            ),
+        ),
+        ("placeholder", "{messages}"),
     ])
 
     chain = prompt | llm | StrOutputParser()
@@ -127,20 +143,29 @@ def generate_node(state: AgentState):
 
     return {"generation": generation, "messages": [AIMessage(content=generation)]}
 
+
 def evaluate_node(state: AgentState):
     print("\n[평가] 환각 여부 및 질문 해결 완벽성 검증 중...")
 
     # 🚀 오늘(KYL-57) 업그레이드한 이중 검증 프롬프트!
     prompt = ChatPromptTemplate.from_messages([
-        ("system", """당신은 깐깐한 AI 품질 검증관(QA)입니다.
-        생성된 답변이 다음 두 가지 기준을 모두 완벽히 통과하는지 엄격하게 평가하세요.
-
-        [평가 기준]
-        1. 사실성(Factuality): '생성된 답변'이 오직 '제공된 문서'에만 기반했는가? (문서에 없는 내용을 조금이라도 지어냈다면 무조건 Fail)
-        2. 관련성(Relevance): '생성된 답변'이 사용자의 '원래 질문'에 대한 답을 명확하고 완벽하게 제공했는가? (동문서답이거나 정보가 부족하면 Fail)
-
-        위 두 기준을 모두 만족해야만 'Pass'를 부여하고, 하나라도 부족하면 'Fail'을 부여하세요."""),
-        ("user", "원래 질문: {question}\n\n제공된 문서: {context}\n\n생성된 답변: {generation}")
+        (
+            "system",
+            (
+                "당신은 깐깐한 AI 품질 검증관(QA)입니다. "
+                "생성된 답변이 다음 두 가지 기준을 모두 완벽히 통과하는지 엄격하게 평가하세요.\n\n"
+                "[평가 기준]\n"
+                "1. 사실성(Factuality): '생성된 답변'이 오직 '제공된 문서'에만 기반했는가? "
+                "(문서에 없는 내용을 조금이라도 지어냈다면 무조건 Fail)\n"
+                "2. 관련성(Relevance): '생성된 답변'이 사용자의 '원래 질문'에 대한 답을 "
+                "명확하고 완벽하게 제공했는가? (동문서답이거나 정보가 부족하면 Fail)\n\n"
+                "위 두 기준을 모두 만족해야만 'Pass'를 부여하고, 하나라도 부족하면 'Fail'을 부여하세요."
+            ),
+        ),
+        (
+            "user",
+            "원래 질문: {question}\n\n제공된 문서: {context}\n\n생성된 답변: {generation}",
+        ),
     ])
 
     structured_llm = llm.with_structured_output(GradeOutput)
@@ -148,29 +173,34 @@ def evaluate_node(state: AgentState):
 
     context_str = "\n".join(state["documents"])
 
-    result = chain.invoke({
-        "question": state["question"],
-        "context": context_str,
-        "generation": state["generation"]
-    })
+    result = chain.invoke({"question": state["question"], "context": context_str, "generation": state["generation"]})
 
     feedback_str = f"{result.score}: {result.reason}"
     print(f"⚖️ 평가 결과: {feedback_str}")
 
     return {"feedback": feedback_str}
 
+
 def rewrite_query_node(state: AgentState):
     print("\n[재작성] 평가 실패. 메타인지 분석 및 검색어 수정 중...")
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", """당신은 AI 에이전트의 검색 성능을 극대화하는 '전문 검색 전략가'입니다.
-        사용자의 원래 질문에 답하기 위해 DB를 검색했지만 실패했습니다.
-        
-        [반드시 지켜야 할 규칙]
-        1. 이전 평가 피드백을 분석하여 무엇이 부족했는지 파악하세요.
-        2. '시도했던 검색어'와 겹치지 않는 완전히 새로운 유의어나 더 포괄적인 단어를 선택하세요.
-        3. 문장 형태가 아닌, **띄어쓰기로만 구분된 2~3개의 핵심 명사 키워드**만 출력하세요. (예: "복지포인트 규정 금액")"""),
-        ("user", "원래 질문: {question}\n시도했던 검색어들: {past_queries}\n이전 평가 피드백: {feedback}")
+        (
+            "system",
+            (
+                "당신은 AI 에이전트의 검색 성능을 극대화하는 '전문 검색 전략가'입니다. "
+                "사용자의 원래 질문에 답하기 위해 DB를 검색했지만 실패했습니다.\n\n"
+                "[반드시 지켜야 할 규칙]\n"
+                "1. 이전 평가 피드백을 분석하여 무엇이 부족했는지 파악하세요.\n"
+                "2. '시도했던 검색어'와 겹치지 않는 완전히 새로운 유의어나 더 포괄적인 단어를 선택하세요.\n"
+                "3. 문장 형태가 아닌, **띄어쓰기로만 구분된 2~3개의 핵심 명사 키워드**만 출력하세요. "
+                '(예: "복지포인트 규정 금액")'
+            ),
+        ),
+        (
+            "user",
+            "원래 질문: {question}\n시도했던 검색어들: {past_queries}\n이전 평가 피드백: {feedback}",
+        ),
     ])
 
     structured_llm = llm.with_structured_output(RewriteOutput)
@@ -178,15 +208,14 @@ def rewrite_query_node(state: AgentState):
 
     past_queries_str = ", ".join(state.get("past_queries", []))
 
-    result = chain.invoke({
-        "question": state['question'],
-        "past_queries": past_queries_str,
-        "feedback": state["feedback"]
-    })
+    result = chain.invoke(
+        {"question": state["question"], "past_queries": past_queries_str, "feedback": state["feedback"]}
+    )
 
     print(f"🔄 새 키워드 도출: '{result.improved_query}'\n💡 반성 및 변경 이유: {result.reasoning}")
 
     return {"search_query": result.improved_query, "retry_count": state["retry_count"] + 1}
+
 
 # ==========================================
 # 4. 라우팅 및 그래프 조립
@@ -200,6 +229,7 @@ def route_evaluation(state: AgentState):
         return "end"
     else:
         return "rewrite"
+
 
 workflow = StateGraph(AgentState)
 workflow.add_node("retrieve", retrieve_node)
@@ -222,14 +252,17 @@ graph_app = workflow.compile(checkpointer=memory)
 # ==========================================
 app = FastAPI(title="LangGraph Meta-Cognition API", version="1.0")
 
+
 class ChatRequest(BaseModel):
     question: str = Field(..., example="올해 체력단련비 지원 한도가 얼마야?")
     thread_id: str = "default-session"
+
 
 class ChatResponse(BaseModel):
     answer: str
     final_query: str
     retry_count: int
+
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
@@ -242,7 +275,7 @@ async def chat_endpoint(request: ChatRequest):
             "messages": [HumanMessage(content=request.question)],
             "question": request.question,
             "search_query": request.question,
-            "retry_count": 0
+            "retry_count": 0,
         }
 
         result = await graph_app.ainvoke(input_state, config=config)
@@ -252,7 +285,7 @@ async def chat_endpoint(request: ChatRequest):
         return ChatResponse(
             answer=final_answer,
             final_query=result.get("search_query", request.question),
-            retry_count=result.get("retry_count", 0)
+            retry_count=result.get("retry_count", 0),
         )
     except Exception as e:
         print(f"❌ [에러 발생] {str(e)}")
@@ -267,18 +300,19 @@ RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
 RABBITMQ_USER = os.getenv("RABBITMQ_USER", "kyle")
 RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "password")
 
+
 def process_question(ch, method, properties, body):
     """
     RabbitMQ의 'question.queue'에 메시지가 들어오면 자동으로 실행되는 워커 함수
     """
-    data = json.loads(body.decode('utf-8'))
+    data = json.loads(body.decode("utf-8"))
     thread_id = data.get("threadId", "default-session")
     question = data.get("question", "")
 
-    print(f"\n==================================================")
+    print("\n==================================================")
     print(f"📩 [작업 수신] Thread: {thread_id}")
     print(f"❓ [질문 내용] {question}")
-    print(f"==================================================")
+    print("==================================================")
 
     try:
         # 1. LangGraph 메타인지 에이전트 실행 (비동기 대신 동기 invoke 사용)
@@ -287,7 +321,7 @@ def process_question(ch, method, properties, body):
             "messages": [HumanMessage(content=question)],
             "question": question,
             "search_query": question,
-            "retry_count": 0
+            "retry_count": 0,
         }
 
         # Pika의 BlockingConnection 안에서는 동기(invoke)로 돌리는 것이 안전합니다.
@@ -301,19 +335,12 @@ def process_question(ch, method, properties, body):
         response_data = {
             "threadId": thread_id,
             "answer": final_answer,
-            "isDone": True, # 프론트엔드 연결 종료를 위한 플래그
-            "metadata": {
-                "query": final_query,
-                "retries": retry_count
-            }
+            "isDone": True,  # 프론트엔드 연결 종료를 위한 플래그
+            "metadata": {"query": final_query, "retries": retry_count},
         }
 
         # 3. answer.queue로 Publish!
-        ch.basic_publish(
-            exchange='',
-            routing_key='answer.queue',
-            body=json.dumps(response_data, ensure_ascii=False)
-        )
+        ch.basic_publish(exchange="", routing_key="answer.queue", body=json.dumps(response_data, ensure_ascii=False))
         print(f"\n📤 [답변 발송 완료] Spring Boot로 전송했습니다. (Thread: {thread_id})")
 
     except Exception as e:
@@ -322,13 +349,14 @@ def process_question(ch, method, properties, body):
         error_data = {
             "threadId": thread_id,
             "answer": "죄송합니다. 시스템 오류로 인해 답변을 생성하지 못했습니다.",
-            "isDone": True
+            "isDone": True,
         }
-        ch.basic_publish(exchange='', routing_key='answer.queue', body=json.dumps(error_data, ensure_ascii=False))
+        ch.basic_publish(exchange="", routing_key="answer.queue", body=json.dumps(error_data, ensure_ascii=False))
 
     finally:
         # 4. RabbitMQ에 "이 작업 성공적으로 끝냈어!" 라고 보고 (ACK)
         ch.basic_ack(delivery_tag=method.delivery_tag)
+
 
 def main():
     """
@@ -342,14 +370,14 @@ def main():
         channel = connection.channel()
 
         # 큐가 없으면 생성 (Spring Boot 쪽과 동일한 설정)
-        channel.queue_declare(queue='question.queue', durable=True)
-        channel.queue_declare(queue='answer.queue', durable=True)
+        channel.queue_declare(queue="question.queue", durable=True)
+        channel.queue_declare(queue="answer.queue", durable=True)
 
         # 파이썬 워커가 한 번에 하나의 메시지만 처리하도록 설정 (Fair Dispatch)
         channel.basic_qos(prefetch_count=1)
 
         # question.queue를 구독
-        channel.basic_consume(queue='question.queue', on_message_callback=process_question)
+        channel.basic_consume(queue="question.queue", on_message_callback=process_question)
 
         print("\n==================================================")
         print("🐰 [*] 파이썬 메타인지 AI 워커 가동 완료!")
@@ -362,9 +390,10 @@ def main():
         print("❌ [연결 실패] RabbitMQ 서버(Docker)가 켜져 있는지 확인해 주세요!")
     except KeyboardInterrupt:
         print("\n🛑 워커를 종료합니다.")
-        if 'connection' in locals() and connection.is_open:
+        if "connection" in locals() and connection.is_open:
             connection.close()
 
+
 # 기존: uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
-if __name__ == '__main__':
-    main() # 🚀 FastAPI 대신 RabbitMQ 워커 메인 루프를 실행합니다!
+if __name__ == "__main__":
+    main()  # 🚀 FastAPI 대신 RabbitMQ 워커 메인 루프를 실행합니다!

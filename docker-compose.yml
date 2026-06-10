@@ -37,26 +37,20 @@ services:
     restart: unless-stopped
     volumes:
       - neo4j-data:/data
-
-  # -------------------------------------------------
-  # 👇 4. 당분간 파이썬은 로컬에서 직접 돌릴 것이므로 주석 처리합니다!
-  # -------------------------------------------------
-  # ai-agent:
-  #   build: .  # 현재 폴더의 Dockerfile을 사용해 이미지를 빌드합니다.
-  #   container_name: ai-agent-api
-  #   ports:
-  #     - "8000:8000"
-  #   environment:
-  #     # 호스트 PC의 환경 변수(DOPPLER_TOKEN)를 컨테이너 안으로 전달합니다.
-  #     - DOPPLER_TOKEN=${DOPPLER_TOKEN}
-  #     # [중요] 도커 네트워크 내부에서는 'localhost' 대신 컨테이너 이름('neo4j')으로 통신해야 합니다.
-  #     # Doppler의 설정값보다 우선 적용되도록 런타임 환경 변수로 덮어씌웁니다.
-  #     - NEO4J_URI=bolt://neo4j:7687
-  #   depends_on:
-  #     - redis
-  #     - neo4j
-  #     - rabbitmq
-  #   restart: unless-stopped
+  # 4. 에이전트 서비스
+  agent:
+    build: ./agent
+    container_name: ai-agent-api
+    ports:
+      - "8000:8000"
+    environment:
+      - DOPPLER_TOKEN=${DOPPLER_TOKEN}
+      - NEO4J_URI=bolt://neo4j:7687
+    depends_on:
+      - neo4j
+      - redis
+      - rabbitmq
+    restart: unless-stopped
 
 # 컨테이너가 삭제되어도 데이터가 날아가지 않도록 볼륨(저장소)을 매핑합니다.
 volumes:

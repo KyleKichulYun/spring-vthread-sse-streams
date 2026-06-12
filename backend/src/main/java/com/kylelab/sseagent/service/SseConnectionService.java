@@ -8,52 +8,72 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 
 @Service
 public class SseConnectionService {
 
     private static final Logger log = LoggerFactory.getLogger(SseConnectionService.class);
 
-    // 🚀 동시성 문제가 발생하지 않도록 Thread-Safe 한 컬렉션 사용
     private final List<SseEmitter> emitters = new CopyOnWriteArrayList<>();
+    private final AtomicInteger connectionCount = new AtomicInteger(0);
+    private static final int MAX_CONNECTIONS = 10000;
 
-    /**
-     * 새로운 클라이언트의 SSE 연결을 생성하고 명부에 등록합니다.
-     */
+    public SseConnectionService(MeterRegistry meterRegistry) {
+        Gauge.builder("sse.connections.active", connectionCount, AtomicInteger::get)
+                .description("현재 활성 SSE 연결 수")
+                .register(meterRegistry);
+    }
+
     public SseEmitter createConnection() {
-        // 타임아웃을 10분(600,000ms)으로 넉넉하게 설정
+        if (connectionCount.incrementAndGet() > MAX_CONNECTIONS) {
+            connectionCount.decrementAndGet();
+            throw new IllegalStateException("최대 연결 수 초과");
+        }
+
         SseEmitter emitter = new SseEmitter(600_000L);
         emitters.add(emitter);
 
-        // 클라이언트가 연결을 끊거나 타임아웃/에러가 발생하면 명부에서 즉시 삭제
-        emitter.onCompletion(() -> emitters.remove(emitter));
-        emitter.onTimeout(() -> emitters.remove(emitter));
-        emitter.onError((e) -> emitters.remove(emitter));
+        Runnable cleanup = () -> {
+            if (emitters.remove(emitter)) {
+                connectionCount.decrementAndGet();
+            }
+        };
+
+        emitter.onCompletion(cleanup);
+        emitter.onTimeout(cleanup);
+        emitter.onError((e) -> cleanup.run());
 
         try {
-            // 연결 성공 시, 최초 접속 더미 이벤트를 하나 보내줍니다. (안 보내면 타임아웃 될 수 있음)
             emitter.send(SseEmitter.event().name("connect").data("connected!"));
-            log.info("🔌 [SSE] 새로운 클라이언트 접속 완료. 현재 연결 수: {}", emitters.size());
+            log.info("🔌 [SSE] 접속 완료. 현재 연결 수: {}", connectionCount.get());
         } catch (IOException e) {
-            emitters.remove(emitter);
+            log.debug("🔌 [SSE] 접속 직후 연결 끊김.");
+            cleanup.run(); // 명시적 정리
         }
 
         return emitter;
     }
 
-    /**
-     * 접속 중인 모든 클라이언트에게 JSON 데이터를 브로드캐스팅합니다.
-     */
     public void broadcast(String jsonData) {
-        log.info("📡 [SSE 브로드캐스트] {} 명의 클라이언트에게 데이터 전송 중...", emitters.size());
+        log.info("📡 [SSE 브로드캐스트] {} 명의 클라이언트 전송 시작", connectionCount.get());
+
         for (SseEmitter emitter : emitters) {
             try {
-                // 'ai-response' 라는 이벤트 이름으로 JSON 데이터를 쏩니다.
                 emitter.send(SseEmitter.event().name("ai-response").data(jsonData));
             } catch (IOException e) {
-                // 전송 실패 시 죽은 연결로 간주하고 삭제
-                emitter.completeWithError(e);
-                emitters.remove(emitter);
+                // [개선] completeWithError를 호출하면 이미 죽은 소켓에
+                // 상태 변경을 시도하다 IllegalStateException이 발생할 수 있음.
+                // 따라서 직접 cleanup 로직을 호출하여 리스트에서 즉시 제거만 수행함.
+                log.debug("📡 [SSE] 클라이언트 연결 유실(Broken Pipe). 명부 제외.");
+
+                // onError 콜백이 나중에 호출되길 기다릴 필요 없이 즉시 제거
+                if (emitters.remove(emitter)) {
+                    connectionCount.decrementAndGet();
+                }
             }
         }
     }
